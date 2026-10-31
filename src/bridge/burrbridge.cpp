@@ -621,6 +621,27 @@ int bt_scene_piece_voxels(BTScene *s, int i, float **out) {
   }
 }
 
+BTMesh *bt_scene_piece_mesh_bevelled(BTScene *s, int i, double bevel, double offset) {
+  if (i < 0 || (size_t)i >= s->pieces.size() || !s->pieces[i].voxel) return 0;
+  const voxel_c *v = s->pieces[i].voxel;
+  float hx = v->getHx(), hy = v->getHy(), hz = v->getHz();
+  v->recalcSpaceCoordinates(&hx, &hy, &hz);
+  try {
+    if (v->meshParamsValid(bevel, offset)) {
+      Polyhedron *poly = v->getMesh(bevel, offset);
+      if (poly) {
+        // fill the grooves between neighbouring voxels, like the STL export does,
+        // so each piece is one smooth block with only its outer edges rounded
+        fillPolyhedronHoles(*poly, true);
+        BTMesh *m = meshFromPolyhedron(poly, hx, hy, hz);
+        delete poly;
+        if (m) return m;
+      }
+    }
+  } catch (...) {}
+  return bt_scene_piece_mesh(s, i);
+}
+
 void bt_scene_piece_info(BTScene *s, int i, int *shape, int *copy) {
   *shape = *copy = 0;
   if (i < 0 || (size_t)i >= s->pieces.size()) return;

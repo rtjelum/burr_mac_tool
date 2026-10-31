@@ -5,8 +5,11 @@ import Foundation
 ///
 ///   BurrTools.app/Contents/MacOS/BurrTools --export-gif puzzle.xmpuzzle out.gif
 ///       [--problem N] [--solution N] [--size PIXELS] [--frames-per-move N]
-///       [--move-time SECONDS] [--camera follow|fixed|orbit] [--colors vibrant|burrtools]
-///       [--background dark|light|white] [--solve]
+///       [--move-time SECONDS] [--camera follow|fixed|orbit] [--colors vibrant|toy|burrtools]
+///       [--background dark|light|white] [--style classic|studio] [--solve]
+///
+/// The output is an MP4 video if its name ends in .mp4, a single PNG image if it
+/// ends in .png (pick the frame with --frame N, counting from 0), otherwise a GIF.
 ///
 /// Problem and solution numbers start at 1. With --solve, the problem is solved
 /// again first (with disassembly), for files whose solutions have no moves stored.
@@ -26,6 +29,8 @@ enum CommandLineExport {
         let solution = (Int(value("--solution") ?? "1") ?? 1) - 1
 
         var options = GifOptions()
+        if value("--style") == "studio" { options.applyDefaults(for: .studio) }
+        options.stillFrame = value("--frame").flatMap(Int.init)
         if let v = value("--size").flatMap(Int.init) { options.size = v }
         if let v = value("--frames-per-move").flatMap(Int.init) { options.framesPerMove = v }
         if let v = value("--move-time").flatMap(Double.init) { options.moveTime = v }
@@ -34,7 +39,12 @@ enum CommandLineExport {
         case "orbit": options.camera = .orbit
         default: break
         }
-        if value("--colors") == "burrtools" { options.colors = .burrTools }
+        switch value("--colors") {
+        case "burrtools": options.colors = .burrTools
+        case "vibrant": options.colors = .vibrant
+        case "toy": options.colors = .toy
+        default: break
+        }
         switch value("--background") {
         case "light": options.background = .light
         case "white": options.background = .white

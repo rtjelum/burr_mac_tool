@@ -127,6 +127,10 @@ void bt_scene_free(BTScene *s);
 int bt_scene_piece_count(BTScene *s);
 /* Mesh of piece i in its own coordinates (NULL if the piece is not placed). */
 BTMesh *bt_scene_piece_mesh(BTScene *s, int piece);
+/* Like bt_scene_piece_mesh but with rounded (bevelled) edges and faces set
+ * back by `offset`, both in grid units (e.g. 0.12 and 0.01). Falls back to the
+ * drawing mesh if that fails. */
+BTMesh *bt_scene_piece_mesh_bevelled(BTScene *s, int piece, double bevel, double offset);
 /* Shape id and copy number of piece i, for colouring. */
 void bt_scene_piece_info(BTScene *s, int piece, int *shape, int *copy);
 /* Total animation steps (0 if there is no disassembly). */

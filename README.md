@@ -25,17 +25,25 @@ What it does:
 * Sets up problems (result shape, how many copies of each piece) and solves
   them in the background, with progress, stop and continue.
 * Plays the disassembly of each solution as an animation.
-* Exports the disassembly as an animated GIF (Export GIF… under the solution
-  viewer): choose size, colours (BurrTools or the bright burr2gif palette),
-  background, smoothness, and a camera that turns to follow each move. Also
-  works from the command line, replacing `scripts/burr2gif.py`:
+* Exports the disassembly as an animated GIF or MP4 video (Export GIF… under
+  the solution viewer), in two looks:
+  * **Classic**: like `scripts/burr2gif.py` (flat matplotlib-style cubes with
+    grid lines, same camera angles and turns).
+  * **Studio**: glossy toy-plastic pieces with rounded edges, studio lighting,
+    reflections, soft shadows and a dark smoky background. Use MP4 for this
+    look; GIF's 256 colours make the soft gradients band.
+
+  Also works from the command line, replacing `scripts/burr2gif.py`:
 
   ```sh
-  build/BurrTools.app/Contents/MacOS/BurrTools --export-gif puzzle.xmpuzzle out.gif \
-      [--problem N] [--solution N] [--size 800] [--frames-per-move 4] \
-      [--camera follow|fixed|orbit] [--colors vibrant|burrtools] \
-      [--background dark|light|white] [--solve]
+  build/BurrTools.app/Contents/MacOS/BurrTools --export-gif puzzle.xmpuzzle out.mp4 \
+      [--style classic|studio] [--problem N] [--solution N] [--size 1024] \
+      [--frames-per-move N] [--camera follow|fixed|orbit] \
+      [--colors vibrant|toy|burrtools] [--background dark|light|white] [--solve]
   ```
+
+  The file type follows the name: `.gif`, `.mp4`, or `.png` for a single
+  frame (choose it with `--frame N`).
 * Exports pieces as STL files for 3D printing (File → Export STL…, ⇧⌘E).
   Enter the size of the assembled puzzle and the clearance between pieces;
   the app works out the unit size and face offset, shows the printed size of

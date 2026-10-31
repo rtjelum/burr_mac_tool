@@ -1,4 +1,5 @@
 import AppKit
+import BurrCore
 import ImageIO
 import Metal
 import SceneKit
@@ -11,6 +12,12 @@ struct GifOptions {
         case follow = "Turn to follow each move"
         case fixed = "Fixed"
         case orbit = "Slowly orbit"
+        var id: String { rawValue }
+    }
+
+    enum Style: String, CaseIterable, Identifiable {
+        case classic = "Classic (like burr2gif)"
+        case studio = "Studio (glossy plastic)"
         var id: String { rawValue }
     }
 
@@ -31,6 +38,21 @@ struct GifOptions {
     var camera = Camera.follow
     var colors = PieceColorStyle.vibrant
     var background = Background.dark
+    var style = Style.classic
+    var stillFrame: Int?           // only render this frame (for PNG output)
+
+    /// Settings that suit each style; the studio look wants smooth motion.
+    mutating func applyDefaults(for style: Style) {
+        self.style = style
+        switch style {
+        case .classic:
+            size = 1024; framesPerMove = 1; moveTime = 0.2; startPause = 0.2; endPause = 0.2; elevation = 35
+            colors = .vibrant
+        case .studio:
+            size = 1024; framesPerMove = 12; moveTime = 0.8; startPause = 1.0; endPause = 2.0; elevation = 32
+            colors = .toy
+        }
+    }
 }
 
 /// One rendered frame: the animation step, the camera direction, and how long it shows.
@@ -53,12 +75,28 @@ final class GifRenderer {
     private let cubeGrid: Bool
     private var voxels: [[SIMD3<Float>]] = []
     private var triangles: [[(a: SIMD3<Float>, b: SIMD3<Float>, c: SIMD3<Float>, normal: SIMD3<Float>)]] = []
+    private var studioGeometry: [SCNGeometry?] = []
+    private var stillBounds: (SIMD3<Float>, SIMD3<Float>)?
 
     /// Must be created on the main thread (it reads the puzzle).
     init(document: PuzzleDocument, problem: Int, solution: Int, options: GifOptions) {
         self.options = options
         model = SolutionScene(document: document, problem: problem, solution: solution, colors: options.colors)
         cubeGrid = document.gridType == .bricks
+        if options.style == .studio {
+            // rounded edges for cubes; other grids already have their own bevels
+            let bevel = cubeGrid ? 0.16 : 0.03
+            for i in model.nodes.indices {
+                guard model.nodes[i] != nil, let color = model.pieceColors[i],
+                      let mesh = model.pieceMeshBevelled(i, bevel: bevel, offset: 0.012) else {
+                    studioGeometry.append(nil)
+                    continue
+                }
+                studioGeometry.append(StudioLook.geometry(mesh, color: color, smoothBevels: cubeGrid))
+                bt_mesh_free(mesh)
+            }
+            return
+        }
         for i in model.nodes.indices {
             if cubeGrid {
                 voxels.append(model.nodes[i] == nil ? [] : model.pieceVoxels(i))
@@ -335,63 +373,119 @@ final class GifRenderer {
         return d * 1.06
     }
 
-    /// Renders all frames and writes the GIF. `progress` gets values 0...1 and
+    /// Renders all frames and writes them to `url`: an MP4 video if the name ends
+    /// in .mp4 or .mov, otherwise an animated GIF. `progress` gets values 0...1 and
     /// returns false to cancel. Runs on the calling (background) thread.
     func write(to url: URL, progress: (Double) -> Bool) throws {
-        let frames = planFrames()
-        let (lo, hi) = animationBounds(frames)
+        let ext = url.pathExtension.lowercased()
+        var frames = planFrames()
+        let sink: FrameSink
+        if ext == "png" {
+            let i = min(max(0, options.stillFrame ?? 0), frames.count - 1)
+            sink = PngSink(url: url)
+            let (lo, hi) = options.style == .studio ? studioBounds(frames) : animationBounds(frames)
+            stillBounds = (lo, hi)
+            frames = [frames[i]]
+        } else if ext == "mp4" || ext == "mov" {
+            sink = try MovieSink(url: url, size: options.size & ~1)
+        } else {
+            sink = try GifSink(url: url, frameCount: frames.count)
+        }
+        let size = options.size & ~1
+
+        let (lo, hi) = stillBounds ?? (options.style == .studio ? studioBounds(frames) : animationBounds(frames))
         let center = (lo + hi) / 2
-        let fov = 20.0
+        let fov = options.style == .studio ? 24.0 : 20.0
         let distance = fitDistance(lo: lo, hi: hi, center: center, frames: frames, fov: fov)
+            * (options.style == .studio ? 1.12 : 1)
 
         let scene = SCNScene()
-        scene.background.contents = backgroundImage(size: options.size)
         let camera = SCNNode()
         camera.camera = SCNCamera()
         camera.camera!.fieldOfView = fov
-        camera.camera!.zNear = Double(max(0.01, distance - simd_length(hi - lo)))
-        camera.camera!.zFar = Double(distance + simd_length(hi - lo))
+        camera.camera!.zNear = Double(max(0.01, distance - simd_length(hi - lo) * 2))
+        camera.camera!.zFar = Double(distance + simd_length(hi - lo) * 4)
         scene.rootNode.addChildNode(camera)
+
+        var studioNodes: [SCNNode?] = []
+        if options.style == .studio {
+            // where the soft shadow under the puzzle lands in the picture; the camera
+            // only turns around the vertical axis, so this is the same in every frame
+            let radius = simd_length(hi - lo) / 2
+            let back = cameraDirection(azimuth: -45)
+            let right = simd_normalize(simd_cross(SIMD3<Float>(0, -1, 0), back))
+            let upv = simd_cross(back, right)
+            let t = Float(tan(fov / 2 * .pi / 180))
+            func project(_ p: SIMD3<Float>) -> CGPoint {
+                let rel = p - (center + back * distance)
+                let depth = -simd_dot(rel, back)
+                return CGPoint(x: CGFloat(0.5 + 0.5 * simd_dot(rel, right) / (depth * t)),
+                               y: CGFloat(0.5 + 0.5 * simd_dot(rel, upv) / (depth * t)))
+            }
+            let floorPoint = SIMD3<Float>(center.x, hi.y + radius * 0.25, center.z)
+            let c = project(floorPoint)
+            let edge = project(floorPoint + right * radius * 1.1)
+            let rx = abs(edge.x - c.x)
+            let shadow = (center: c, radii: CGSize(width: rx, height: rx * CGFloat(sin(options.elevation * .pi / 180)) * 0.9))
+            StudioLook.setUp(scene: scene, camera: camera.camera!, center: center, radius: radius,
+                             bottom: hi.y, size: size, shadow: shadow)
+            for g in studioGeometry {
+                let n = g.map { SCNNode(geometry: $0) }
+                if let n { scene.rootNode.addChildNode(n) }
+                studioNodes.append(n)
+            }
+        } else {
+            scene.background.contents = backgroundImage(size: size)
+        }
 
         let renderer = SCNRenderer(device: MTLCreateSystemDefaultDevice(), options: nil)
         renderer.scene = scene
         renderer.pointOfView = camera
 
-        guard let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.gif.identifier as CFString, frames.count, nil) else {
-            throw BurrError(message: "Could not create the GIF file.")
-        }
-        CGImageDestinationSetProperties(dest, [
-            kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0],
-        ] as CFDictionary)
-
-        let size = CGSize(width: options.size, height: options.size)
         var content: SCNNode?
         for (i, frame) in frames.enumerated() {
             if !progress(Double(i) / Double(frames.count)) { throw CancellationError() }
 
-            content?.removeFromParentNode()
-            let n = node(for: buildScene(step: frame.step))
-            scene.rootNode.addChildNode(n)
-            content = n
+            if options.style == .studio {
+                for (node, state) in zip(studioNodes, model.pieceStates(step: frame.step)) {
+                    guard let node else { continue }
+                    let a = state?.alpha ?? 0
+                    node.simdPosition = state?.position ?? .zero
+                    node.opacity = CGFloat(a)
+                    node.isHidden = a < 0.01
+                }
+            } else {
+                content?.removeFromParentNode()
+                let n = node(for: buildScene(step: frame.step))
+                scene.rootNode.addChildNode(n)
+                content = n
+            }
 
             camera.simdPosition = center + cameraDirection(azimuth: frame.azimuth) * distance
             camera.simdLook(at: center, up: SIMD3(0, -1, 0), localFront: SIMD3(0, 0, -1))
 
-            let image = renderer.snapshot(atTime: 0, with: size, antialiasingMode: .multisampling4X)
+            let image = renderer.snapshot(atTime: Double(i) / 30, with: CGSize(width: size, height: size),
+                                          antialiasingMode: .multisampling4X)
             guard let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { continue }
-            // GIF delays are in 1/100 s
-            let delay = (frame.delay * 100).rounded() / 100
-            CGImageDestinationAddImage(dest, cg, [
-                kCGImagePropertyGIFDictionary: [
-                    kCGImagePropertyGIFDelayTime: delay,
-                    kCGImagePropertyGIFUnclampedDelayTime: delay,
-                ],
-            ] as CFDictionary)
+            try sink.add(cg, delay: frame.delay)
         }
         _ = progress(1)
-        guard CGImageDestinationFinalize(dest) else {
-            throw BurrError(message: "Could not write the GIF file.")
+        try sink.finish()
+    }
+
+    /// Box around the studio pieces at whole moves.
+    private func studioBounds(_ frames: [GifFrame]) -> (lo: SIMD3<Float>, hi: SIMD3<Float>) {
+        var lo = SIMD3<Float>(repeating: .infinity), hi = SIMD3<Float>(repeating: -.infinity)
+        for step in Set(frames.map { $0.step.rounded(.down) }) {
+            for (g, state) in zip(studioGeometry, model.pieceStates(step: step)) {
+                guard let g, let state, state.alpha > 0.99 else { continue }
+                let (mn, mx) = g.boundingBox
+                lo = simd_min(lo, state.position + SIMD3(Float(mn.x), Float(mn.y), Float(mn.z)))
+                hi = simd_max(hi, state.position + SIMD3(Float(mx.x), Float(mx.y), Float(mx.z)))
+            }
         }
+        if lo.x > hi.x { return (SIMD3(repeating: -1), SIMD3(repeating: 1)) }
+        return (lo, hi)
     }
 
     /// Number of frames the current options produce (for the dialog).
@@ -410,6 +504,7 @@ struct GifExportView: View {
     @StateObject private var progress = ViewState<Double?>(nil)
     @StateObject private var cancelled = CancelFlag()
     @StateObject private var message = ViewState<String?>(nil)
+    @StateObject private var movie = ViewState<Bool>(false)
 
     final class CancelFlag: ObservableObject {
         private let lock = NSLock()
@@ -420,11 +515,19 @@ struct GifExportView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Export GIF").font(.title2.bold())
-            Text("Saves the disassembly of this solution (\(steps) moves) as an animated GIF.")
+            Text("Export Animation").font(.title2.bold())
+            Text("Saves the disassembly of this solution (\(steps) moves) as an animated GIF or a video.")
                 .foregroundStyle(.secondary)
 
             Form {
+                Picker("Look", selection: Binding(get: { options.value.style },
+                                                  set: { options.value.applyDefaults(for: $0); movie.value = $0 == .studio })) {
+                    ForEach(GifOptions.Style.allCases) { Text($0.rawValue).tag($0) }
+                }
+                Picker("Format", selection: $movie.value) {
+                    Text("Animated GIF").tag(false)
+                    Text("MP4 video (best for the studio look)").tag(true)
+                }
                 Picker("Size", selection: $options.value.size) {
                     Text("512 × 512").tag(512)
                     Text("800 × 800").tag(800)
@@ -436,13 +539,16 @@ struct GifExportView: View {
                 Picker("Colours", selection: $options.value.colors) {
                     ForEach(PieceColorStyle.allCases) { Text($0.rawValue).tag($0) }
                 }
-                Picker("Background", selection: $options.value.background) {
-                    ForEach(GifOptions.Background.allCases) { Text($0.rawValue).tag($0) }
+                if options.value.style == .classic {
+                    Picker("Background", selection: $options.value.background) {
+                        ForEach(GifOptions.Background.allCases) { Text($0.rawValue).tag($0) }
+                    }
                 }
                 Picker("Smoothness", selection: $options.value.framesPerMove) {
                     Text("1 frame per move (like burr2gif)").tag(1)
                     Text("4 frames per move").tag(4)
-                    Text("8 frames per move (smooth, larger file)").tag(8)
+                    Text("8 frames per move").tag(8)
+                    Text("12 frames per move (smooth, larger file)").tag(12)
                 }
                 LabeledContent("Time per move") {
                     secondsField($options.value.moveTime)
@@ -473,14 +579,14 @@ struct GifExportView: View {
                     if progress.value != nil { cancelled.set(true) } else { dismiss() }
                 }
                 .keyboardShortcut(.cancelAction)
-                Button("Save GIF…") { save() }
+                Button(movie.value ? "Save Video…" : "Save GIF…") { save() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(progress.value != nil)
             }
         }
         .padding(20)
         .frame(width: 520)
-        .alert("Export GIF", isPresented: Binding(get: { message.value != nil }, set: { if !$0 { message.value = nil } })) {
+        .alert("Export Animation", isPresented: Binding(get: { message.value != nil }, set: { if !$0 { message.value = nil } })) {
             Button("OK") { message.value = nil }
         } message: {
             Text(message.value ?? "")
@@ -499,8 +605,8 @@ struct GifExportView: View {
 
     private func save() {
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.gif]
-        panel.nameFieldStringValue = "solution \(solution + 1).gif"
+        panel.allowedContentTypes = [movie.value ? .mpeg4Movie : .gif]
+        panel.nameFieldStringValue = "solution \(solution + 1).\(movie.value ? "mp4" : "gif")"
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
         var opts = options.value

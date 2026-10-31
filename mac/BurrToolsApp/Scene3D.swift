@@ -124,7 +124,15 @@ struct ShapeSceneView: View {
 enum PieceColorStyle: String, CaseIterable, Identifiable {
     case burrTools = "BurrTools colours"
     case vibrant = "Vibrant (like burr2gif)"
+    case toy = "Toy plastic"
     var id: String { rawValue }
+
+    /// Toy-like colours (from render.jpeg): orange, yellow, pink, blue, green, teal, purple, ...
+    static let toyPalette: [(r: Float, g: Float, b: Float)] = [
+        (0.93, 0.45, 0.10), (0.98, 0.80, 0.12), (0.92, 0.30, 0.48), (0.16, 0.45, 0.85), (0.16, 0.62, 0.26),
+        (0.10, 0.58, 0.58), (0.52, 0.28, 0.78), (0.85, 0.16, 0.20), (0.40, 0.72, 0.95), (0.98, 0.60, 0.70),
+        (0.55, 0.78, 0.20), (0.95, 0.65, 0.30),
+    ]
 
     /// The bright palette from scripts/burr2gif.py, one colour per piece.
     static let vibrantPalette: [(r: Float, g: Float, b: Float)] = [
@@ -160,9 +168,12 @@ final class SolutionScene: ObservableObject {
                 }
                 var shape: Int32 = 0, copy: Int32 = 0
                 bt_scene_piece_info(handle, i, &shape, &copy)
-                let color = colors == .vibrant
-                    ? PieceColorStyle.vibrantPalette[nodes.count % PieceColorStyle.vibrantPalette.count]
-                    : PieceColors.color(shape: Int(shape), copy: Int(copy))
+                let color: (r: Float, g: Float, b: Float)
+                switch colors {
+                case .vibrant: color = PieceColorStyle.vibrantPalette[nodes.count % PieceColorStyle.vibrantPalette.count]
+                case .toy: color = PieceColorStyle.toyPalette[nodes.count % PieceColorStyle.toyPalette.count]
+                case .burrTools: color = PieceColors.color(shape: Int(shape), copy: Int(copy))
+                }
                 pieceColors.append(color)
                 let node = SCNNode(geometry: MeshBuilder.geometry(mesh, color: color))
                 bt_mesh_free(mesh)
@@ -204,6 +215,12 @@ final class SolutionScene: ObservableObject {
             (v(t * 3), v(t * 3 + 1), v(t * 3 + 2),
              SIMD3(m.normals[t * 9], m.normals[t * 9 + 1], m.normals[t * 9 + 2]))
         }
+    }
+
+    /// Rounded mesh of piece i (caller frees with bt_mesh_free), nil if not placed.
+    func pieceMeshBevelled(_ i: Int, bevel: Double, offset: Double) -> UnsafeMutablePointer<BTMesh>? {
+        guard let handle else { return nil }
+        return bt_scene_piece_mesh_bevelled(handle, Int32(i), bevel, offset)
     }
 
     /// Position and opacity of every piece at `step` (nil for unplaced pieces).
