@@ -3,6 +3,12 @@ import SwiftUI
 
 @main
 struct BurrToolsApp: App {
+    init() {
+        if CommandLine.arguments.contains("--export-gif") {
+            exit(CommandLineExport.run(CommandLine.arguments))
+        }
+    }
+
     var body: some Scene {
         DocumentGroup(newDocument: { PuzzleDocument() }) { file in
             ContentView(document: file.document)

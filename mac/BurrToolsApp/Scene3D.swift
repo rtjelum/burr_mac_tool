@@ -7,6 +7,10 @@ import SwiftUI
 /// Builds SceneKit geometry from meshes created by the C++ library.
 enum MeshBuilder {
     static func geometry(_ mesh: UnsafeMutablePointer<BTMesh>, shape: Int, copy: Int) -> SCNGeometry {
+        geometry(mesh, color: PieceColors.color(shape: shape, copy: copy))
+    }
+
+    static func geometry(_ mesh: UnsafeMutablePointer<BTMesh>, color base: (r: Float, g: Float, b: Float)) -> SCNGeometry {
         let m = mesh.pointee
         let vertexCount = Int(m.triangleCount) * 3
         let floatCount = vertexCount * 3
@@ -32,7 +36,6 @@ enum MeshBuilder {
             groups[g].append(contentsOf: [i, i + 1, i + 2])
         }
 
-        let base = PieceColors.color(shape: shape, copy: copy)
         let colors = [PieceColors.light(base), PieceColors.dark(base), (r: Float(0.15), g: Float(0.15), b: Float(0.15))]
 
         var elements: [SCNGeometryElement] = []
@@ -118,15 +121,31 @@ struct ShapeSceneView: View {
     }
 }
 
+enum PieceColorStyle: String, CaseIterable, Identifiable {
+    case burrTools = "BurrTools colours"
+    case vibrant = "Vibrant (like burr2gif)"
+    var id: String { rawValue }
+
+    /// The bright palette from scripts/burr2gif.py, one colour per piece.
+    static let vibrantPalette: [(r: Float, g: Float, b: Float)] = [
+        (1.00, 0.20, 0.40), (0.10, 0.90, 0.50), (0.00, 0.60, 1.00), (1.00, 0.80, 0.00), (0.70, 0.30, 1.00),
+        (0.00, 0.90, 0.90), (1.00, 0.42, 0.00), (0.52, 1.00, 0.00), (0.18, 0.22, 1.00), (0.95, 0.05, 0.05),
+        (0.00, 0.78, 0.55), (1.00, 0.00, 0.78), (1.00, 0.65, 0.00), (0.28, 0.75, 1.00), (1.00, 0.32, 0.15),
+        (0.25, 1.00, 0.30), (0.60, 0.08, 1.00), (1.00, 0.88, 0.45), (0.00, 0.88, 0.72), (1.00, 0.28, 0.62),
+        (0.82, 1.00, 0.12), (0.40, 0.55, 1.00), (1.00, 0.52, 0.08), (0.08, 0.68, 0.42), (0.48, 0.05, 0.88),
+        (0.55, 0.88, 1.00),
+    ]
+}
+
 /// Owns a C++ scene of one solution and moves the SceneKit nodes as the animation runs.
 final class SolutionScene: ObservableObject {
     let scene: SCNScene
     let camera: SCNNode
     let steps: Int
     private let handle: OpaquePointer?
-    private var nodes: [SCNNode?] = []
+    private(set) var nodes: [SCNNode?] = []
 
-    init(document: PuzzleDocument, problem: Int, solution: Int) {
+    init(document: PuzzleDocument, problem: Int, solution: Int, colors: PieceColorStyle = .burrTools) {
         handle = bt_scene_create(document.puzzle, Int32(problem), Int32(solution))
         let root = SCNNode()
         if let handle {
@@ -138,7 +157,10 @@ final class SolutionScene: ObservableObject {
                 }
                 var shape: Int32 = 0, copy: Int32 = 0
                 bt_scene_piece_info(handle, i, &shape, &copy)
-                let node = SCNNode(geometry: MeshBuilder.geometry(mesh, shape: Int(shape), copy: Int(copy)))
+                let color = colors == .vibrant
+                    ? PieceColorStyle.vibrantPalette[nodes.count % PieceColorStyle.vibrantPalette.count]
+                    : PieceColors.color(shape: Int(shape), copy: Int(copy))
+                let node = SCNNode(geometry: MeshBuilder.geometry(mesh, color: color))
                 bt_mesh_free(mesh)
                 root.addChildNode(node)
                 nodes.append(node)
@@ -156,6 +178,12 @@ final class SolutionScene: ObservableObject {
 
     func update(step: Double) {
         Self.place(handle, nodes, step: step)
+    }
+
+    /// Position and opacity of every piece at `step` (nil for unplaced pieces).
+    func pieceStates(step: Double) -> [(position: SIMD3<Float>, alpha: Float)?] {
+        update(step: step)
+        return nodes.map { node in node.map { ($0.simdPosition, Float($0.opacity)) } }
     }
 
     private static func place(_ handle: OpaquePointer?, _ nodes: [SCNNode?], step: Double) {
@@ -177,9 +205,16 @@ struct SolutionSceneView: View {
     @StateObject private var model: SolutionScene
     @StateObject private var step = ViewState<Double>(0.0)
     @StateObject private var playing = ViewState<Bool>(false)
+    @StateObject private var showGifExport = ViewState<Bool>(false)
+    private let document: PuzzleDocument
+    private let problem: Int
+    private let solution: Int
     private let timer = Timer.publish(every: 1.0 / 30, on: .main, in: .common).autoconnect()
 
     init(document: PuzzleDocument, problem: Int, solution: Int) {
+        self.document = document
+        self.problem = problem
+        self.solution = solution
         _model = StateObject(wrappedValue: SolutionScene(document: document, problem: problem, solution: solution))
     }
 
@@ -215,6 +250,12 @@ struct SolutionSceneView: View {
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                         .frame(minWidth: 110, alignment: .trailing)
+
+                    Button("Export GIF…") {
+                        playing.value = false
+                        showGifExport.value = true
+                    }
+                    .help("Save this disassembly as an animated GIF")
                 }
                 .padding(10)
             } else {
@@ -225,6 +266,9 @@ struct SolutionSceneView: View {
             }
         }
         .onChange(of: step.value) { _, newValue in model.update(step: newValue) }
+        .sheet(isPresented: $showGifExport.value) {
+            GifExportView(document: document, problem: problem, solution: solution, steps: model.steps)
+        }
         .onReceive(timer) { _ in
             guard playing.value else { return }
             let next = step.value + 1.0 / 30 * 1.5

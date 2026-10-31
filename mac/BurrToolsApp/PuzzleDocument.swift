@@ -86,6 +86,11 @@ final class PuzzleDocument: ReferenceFileDocument {
         puzzle = try Self.load(data)
     }
 
+    /// Opens a puzzle file directly (used by the command line export).
+    init(contentsOf url: URL) throws {
+        puzzle = try Self.load(try Data(contentsOf: url))
+    }
+
     deinit {
         solverTimer?.invalidate()
         bt_solver_free(solverHandle)
