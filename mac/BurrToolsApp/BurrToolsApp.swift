@@ -86,6 +86,7 @@ struct ContentView: View {
     @Environment(\.undoManager) private var undo
     @StateObject private var selection = ViewState<SidebarItem?>(.info)
     @StateObject private var showStlExport = ViewState<Bool>(false)
+    @StateObject private var showNewBox = ViewState<Bool>(false)
 
     var body: some View {
         let _ = document.revision
@@ -126,6 +127,7 @@ struct ContentView: View {
                 HStack {
                     Menu {
                         Button("New Shape") { addShape() }
+                        Button("New Box…") { showNewBox.value = true }
                         Button("New Problem") { addProblem() }
                     } label: {
                         Image(systemName: "plus")
@@ -162,6 +164,9 @@ struct ContentView: View {
             }
         }
         .focusedSceneValue(\.exportStl, canExportStl ? { showStlExport.value = true } : nil)
+        .sheet(isPresented: $showNewBox.value) {
+            NewBoxView(document: document) { selection.value = .shape($0) }
+        }
         .sheet(isPresented: $showStlExport.value) {
             StlExportView(document: document, problem: stlProblem)
         }

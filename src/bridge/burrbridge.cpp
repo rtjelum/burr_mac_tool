@@ -286,6 +286,56 @@ void bt_shape_set(BTPuzzle *p, int s, int x, int y, int z, int state) {
   GUARD_END(nullptr, )
 }
 
+void bt_shape_tool(BTPuzzle *p, int s, int tool) {
+  GUARD_BEGIN
+  if (!validShape(p, s)) return;
+  voxel_c *v = p->puzzle->getShape(s);
+  switch (tool) {
+  case BT_TOOL_FILL_ALL:
+  case BT_TOOL_CLEAR_ALL:
+    for (unsigned int i = 0; i < v->getXYZ(); i++) {
+      unsigned int x, y, z;
+      if (!v->indexToXYZ(i, &x, &y, &z) || !v->validCoordinate(x, y, z)) continue;
+      v->setState(i, tool == BT_TOOL_FILL_ALL ? voxel_c::VX_FILLED : voxel_c::VX_EMPTY);
+    }
+    break;
+  case BT_TOOL_INSIDE_VARIABLE: v->actionOnSpace(voxel_c::ACT_VARIABLE, true); break;
+  case BT_TOOL_INSIDE_FILLED: v->actionOnSpace(voxel_c::ACT_FIXED, true); break;
+  case BT_TOOL_OUTSIDE_VARIABLE: v->actionOnSpace(voxel_c::ACT_VARIABLE, false); break;
+  case BT_TOOL_OUTSIDE_FILLED: v->actionOnSpace(voxel_c::ACT_FIXED, false); break;
+  case BT_TOOL_ALL_VARIABLE:
+    v->actionOnSpace(voxel_c::ACT_VARIABLE, true);
+    v->actionOnSpace(voxel_c::ACT_VARIABLE, false);
+    break;
+  case BT_TOOL_ALL_FILLED:
+    v->actionOnSpace(voxel_c::ACT_FIXED, true);
+    v->actionOnSpace(voxel_c::ACT_FIXED, false);
+    break;
+  case BT_TOOL_INSIDE_EMPTY: {
+    // decide first, then change, so emptying one voxel doesn't expose its neighbours
+    std::vector<unsigned int> inside;
+    for (unsigned int z = 0; z < v->getZ(); z++)
+      for (unsigned int y = 0; y < v->getY(); y++)
+        for (unsigned int x = 0; x < v->getX(); x++) {
+          if (v->isEmpty(x, y, z)) continue;
+          bool emptyNeighbour = false;
+          int idx = 0, nx, ny, nz;
+          while (!emptyNeighbour && v->getNeighbor(idx, 0, x, y, z, &nx, &ny, &nz)) {
+            emptyNeighbour |= v->isEmpty2(nx, ny, nz);
+            idx++;
+          }
+          if (!emptyNeighbour) inside.push_back(v->getIndex(x, y, z));
+        }
+    for (size_t i = 0; i < inside.size(); i++) v->setState(inside[i], voxel_c::VX_EMPTY);
+    break;
+  }
+  case BT_TOOL_FILL_HOLES: v->fillHoles(0); break;
+  default: return;
+  }
+  v->initHotspot();
+  GUARD_END(nullptr, )
+}
+
 BTMesh *bt_shape_mesh(BTPuzzle *p, int s) {
   GUARD_BEGIN
   if (!validShape(p, s)) return 0;
@@ -359,6 +409,20 @@ void bt_problem_set_shape_count(BTPuzzle *p, int r, int s, int mn, int mx) {
     pr->setShapeMinimum(s, mn);
     pr->setShapeMaximum(s, mx);
   }
+  GUARD_END(nullptr, )
+}
+
+int bt_problem_max_holes(BTPuzzle *p, int r) {
+  if (!validProblem(p, r)) return -1;
+  problem_c *pr = p->puzzle->getProblem(r);
+  return pr->maxHolesDefined() ? (int)pr->getMaxHoles() : -1;
+}
+
+void bt_problem_set_max_holes(BTPuzzle *p, int r, int holes) {
+  GUARD_BEGIN
+  if (!validProblem(p, r)) return;
+  problem_c *pr = p->puzzle->getProblem(r);
+  if (holes < 0) pr->setMaxHolesInvalid(); else pr->setMaxHoles(holes);
   GUARD_END(nullptr, )
 }
 

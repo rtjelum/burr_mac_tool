@@ -36,6 +36,10 @@ struct ProblemDetailView: View {
                                 }
                                 .labelsHidden()
                             }
+                            GridRow {
+                                Text("Max holes")
+                                maxHolesControl
+                            }
                         }
                         .padding(6)
                     }
@@ -83,6 +87,38 @@ struct ProblemDetailView: View {
             selectedSolution.value = nil
         }
         .onDisappear(perform: saveName)
+    }
+
+    /// Limit on how many variable cubes of the result may stay empty.
+    private var maxHolesControl: some View {
+        let holes = Int(bt_problem_max_holes(document.puzzle, Int32(problem)))
+        // the solver only uses this when some piece count is a range; with fixed
+        // counts the number of empty cubes follows from the piece sizes
+        let hasRange = document.shapes.contains { shape in
+            let c = document.problemShapeCount(problem, shape.id)
+            return c.min != c.max
+        }
+        return HStack {
+            Toggle("Limit", isOn: Binding(get: { holes >= 0 }, set: { on in setMaxHoles(on ? 0 : -1) }))
+            if holes >= 0 {
+                Stepper(value: Binding(get: { holes }, set: { setMaxHoles(max(0, $0)) }), in: 0...999) {
+                    Text("\(holes)").monospacedDigit()
+                }
+                .fixedSize()
+            }
+            if !hasRange {
+                Text("used when a piece count is a range").font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .help("How many variable cubes of the result shape may stay empty. The solver uses this when some piece count is a range (min < max); with fixed counts the number of empty cubes follows from the piece sizes.")
+        .disabled(document.isSolving || !hasRange)
+    }
+
+    private func setMaxHoles(_ value: Int) {
+        document.edit("Change Max Holes", undo: undo) { p in
+            bt_problem_set_max_holes(p, Int32(problem), Int32(value))
+        }
     }
 
     private var isSolvingThis: Bool { document.solver?.problem == problem }

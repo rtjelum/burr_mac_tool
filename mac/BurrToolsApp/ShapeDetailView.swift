@@ -24,6 +24,7 @@ struct ShapeDetailView: View {
                 sizeStepper("Y", info.size.y) { resize(info, y: $0) }
                 sizeStepper("Z", info.size.z) { resize(info, z: $0) }
                 Spacer()
+                ShapeFillMenu(document: document, shape: shape)
                 Text("\(info.voxels) units").foregroundStyle(.secondary)
             }
             .padding(10)
@@ -76,7 +77,7 @@ struct ShapeDetailView: View {
 }
 
 /// Edits one Z layer of a cube-grid shape.
-/// Click or drag to fill/empty cells; hold Option to paint "variable" cells.
+/// Click or drag to paint with the chosen pen (filled, variable or empty).
 struct LayerEditor: View {
     @ObservedObject var document: PuzzleDocument
     let shape: Int
@@ -85,6 +86,7 @@ struct LayerEditor: View {
 
     @StateObject private var paintValue = ViewState<Int?>(nil)
     @StateObject private var editStart = ViewState<Data?>(nil)
+    @StateObject private var pen = ViewState<Int>(BT_VOXEL_FILLED)
 
     var body: some View {
         let _ = document.revision
@@ -97,9 +99,25 @@ struct LayerEditor: View {
                     Text("Layer \(min(layer, sz - 1) + 1) of \(sz)").monospacedDigit()
                 }
                 Spacer()
-                Button("Fill Layer") { fillLayer(BT_VOXEL_FILLED, sx, sy) }
+                Picker("Pen", selection: $pen.value) {
+                    Label("Filled", systemImage: "square.fill").tag(BT_VOXEL_FILLED)
+                    Label("Variable", systemImage: "square.dashed.inset.filled").tag(BT_VOXEL_VARIABLE)
+                    Label("Empty", systemImage: "eraser").tag(BT_VOXEL_EMPTY)
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                .help("What clicking and dragging paints. Variable cubes may be filled or left empty by the solver.")
+            }
+            .disabled(document.isSolving)
+
+            HStack {
+                Spacer()
+                Button(pen.value == BT_VOXEL_VARIABLE ? "Layer Variable" : "Fill Layer") {
+                    fillLayer(pen.value == BT_VOXEL_EMPTY ? BT_VOXEL_FILLED : pen.value, sx, sy)
+                }
                 Button("Clear Layer") { fillLayer(BT_VOXEL_EMPTY, sx, sy) }
             }
+            .controlSize(.small)
             .disabled(document.isSolving)
 
             GeometryReader { geo in
@@ -143,7 +161,7 @@ struct LayerEditor: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
-            Text("Click or drag to add or remove cubes. Hold ⌥ Option to mark cubes as variable.")
+            Text("Click or drag to paint with the pen; clicking a cube that already has that state clears it. Hold ⌥ Option to paint variable cubes. Variable cubes show a dot.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -156,9 +174,9 @@ struct LayerEditor: View {
         guard x >= 0, y >= 0, x < sx, y < sy, p.x >= 0, p.y >= 0 else { return }
 
         if paintValue.value == nil {
-            // first touch decides whether this stroke fills or clears
-            let target = NSEvent.modifierFlags.contains(.option) ? BT_VOXEL_VARIABLE : BT_VOXEL_FILLED
-            paintValue.value = document.voxel(shape, x, y, z) == target ? BT_VOXEL_EMPTY : target
+            // first touch decides whether this stroke paints the pen or clears
+            let target = NSEvent.modifierFlags.contains(.option) ? BT_VOXEL_VARIABLE : pen.value
+            paintValue.value = (target != BT_VOXEL_EMPTY && document.voxel(shape, x, y, z) == target) ? BT_VOXEL_EMPTY : target
             editStart.value = document.beginEdit()
         }
         guard let value = paintValue.value, document.voxel(shape, x, y, z) != value else { return }
@@ -167,12 +185,127 @@ struct LayerEditor: View {
 
     private func fillLayer(_ value: Int, _ sx: Int, _ sy: Int) {
         let z = layer
-        document.edit(value == BT_VOXEL_EMPTY ? "Clear Layer" : "Fill Layer", undo: undo) { p in
+        document.edit(value == BT_VOXEL_EMPTY ? "Clear Layer" : (value == BT_VOXEL_VARIABLE ? "Make Layer Variable" : "Fill Layer"), undo: undo) { p in
             for x in 0..<sx {
                 for y in 0..<sy {
                     bt_shape_set(p, Int32(shape), Int32(x), Int32(y), Int32(z), Int32(value))
                 }
             }
         }
+    }
+}
+
+/// The whole-shape fill tools of the original BurrTools, plus a few more.
+struct ShapeFillMenu: View {
+    @ObservedObject var document: PuzzleDocument
+    let shape: Int
+    @Environment(\.undoManager) private var undo
+
+    var body: some View {
+        Menu("Fill") {
+            Section("Whole shape") {
+                tool("Fill Everything", BT_TOOL_FILL_ALL)
+                tool("Clear Everything", BT_TOOL_CLEAR_ALL)
+                tool("Fill Enclosed Holes", BT_TOOL_FILL_HOLES)
+            }
+            Section("Inside (cubes not on the surface)") {
+                tool("Make Inside Variable", BT_TOOL_INSIDE_VARIABLE)
+                tool("Make Inside Filled", BT_TOOL_INSIDE_FILLED)
+                tool("Hollow Out (Make Inside Empty)", BT_TOOL_INSIDE_EMPTY)
+            }
+            Section("Outside (cubes on the surface)") {
+                tool("Make Outside Variable", BT_TOOL_OUTSIDE_VARIABLE)
+                tool("Make Outside Filled", BT_TOOL_OUTSIDE_FILLED)
+            }
+            Section("All cubes") {
+                tool("Make All Variable", BT_TOOL_ALL_VARIABLE)
+                tool("Make All Filled", BT_TOOL_ALL_FILLED)
+            }
+        }
+        .fixedSize()
+        .disabled(document.isSolving)
+        .help("Fill tools for the whole shape. \"Make Inside Variable\" turns a solid box into a result shape whose centre may stay empty.")
+    }
+
+    private func tool(_ title: String, _ id: Int) -> some View {
+        Button(title) {
+            document.edit(title, undo: undo) { p in bt_shape_tool(p, Int32(shape), Int32(id)) }
+        }
+    }
+}
+
+/// Creates a box-shaped shape with a chosen fill, e.g. a result shape with a variable centre.
+struct NewBoxView: View {
+    @ObservedObject var document: PuzzleDocument
+    var onCreated: (Int) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.undoManager) private var undo
+    @StateObject private var size = ViewState(SIMD3<Int>(5, 5, 5))
+    @StateObject private var fill = ViewState<Int>(BT_TOOL_INSIDE_VARIABLE)
+    @StateObject private var name = ViewState<String>("")
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("New Box").font(.title2.bold())
+            Form {
+                TextField("Name", text: $name.value, prompt: Text("optional"))
+                LabeledContent("Size") {
+                    HStack {
+                        dim("X", \.x)
+                        dim("Y", \.y)
+                        dim("Z", \.z)
+                    }
+                }
+                Picker("Fill", selection: $fill.value) {
+                    Text("Solid").tag(BT_TOOL_FILL_ALL)
+                    Text("Variable inside (like Borneo)").tag(BT_TOOL_INSIDE_VARIABLE)
+                    Text("Hollow (empty inside)").tag(BT_TOOL_INSIDE_EMPTY)
+                    Text("All variable").tag(BT_TOOL_ALL_VARIABLE)
+                }
+                .pickerStyle(.radioGroup)
+            }
+            .formStyle(.grouped)
+            Text(description).font(.callout).foregroundStyle(.secondary)
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Create") { create() }.keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 440)
+    }
+
+    private var description: String {
+        switch fill.value {
+        case BT_TOOL_INSIDE_VARIABLE:
+            return "The surface must be filled; cubes inside may be filled or left empty. Use it as the result shape when the pieces don't fill the box completely. Limit the empty cubes with Max holes on the problem."
+        case BT_TOOL_INSIDE_EMPTY:
+            return "Only the surface is filled; the inside is empty."
+        case BT_TOOL_ALL_VARIABLE:
+            return "Every cube may be filled or left empty."
+        default:
+            return "Every cube is filled."
+        }
+    }
+
+    private func dim(_ label: String, _ key: WritableKeyPath<SIMD3<Int>, Int>) -> some View {
+        Stepper(value: Binding(get: { size.value[keyPath: key] }, set: { size.value[keyPath: key] = $0 }), in: 1...40) {
+            Text("\(label) \(size.value[keyPath: key])").monospacedDigit()
+        }
+        .fixedSize()
+    }
+
+    private func create() {
+        let s = size.value, f = fill.value, n = name.value
+        var index = 0
+        document.edit("New Box", undo: undo) { p in
+            index = Int(bt_shape_add(p, Int32(s.x), Int32(s.y), Int32(s.z)))
+            bt_shape_tool(p, Int32(index), Int32(BT_TOOL_FILL_ALL))
+            if f != BT_TOOL_FILL_ALL { bt_shape_tool(p, Int32(index), Int32(f)) }
+            if !n.isEmpty { bt_shape_set_name(p, Int32(index), n) }
+        }
+        onCreated(index)
+        dismiss()
     }
 }

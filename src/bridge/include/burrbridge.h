@@ -54,6 +54,21 @@ void bt_shape_resize(BTPuzzle *p, int shape, int sx, int sy, int sz);
 int bt_shape_voxel_count(BTPuzzle *p, int shape);
 int bt_shape_get(BTPuzzle *p, int shape, int x, int y, int z);
 void bt_shape_set(BTPuzzle *p, int shape, int x, int y, int z, int state);
+/* Whole-shape fill tools. "Inside" voxels have no empty neighbour, "outside"
+ * voxels are the filled ones on the surface. */
+enum {
+  BT_TOOL_FILL_ALL = 0,       /* every voxel filled */
+  BT_TOOL_CLEAR_ALL,          /* every voxel empty */
+  BT_TOOL_INSIDE_VARIABLE,    /* e.g. a box whose centre may stay empty */
+  BT_TOOL_INSIDE_FILLED,
+  BT_TOOL_INSIDE_EMPTY,       /* hollow out */
+  BT_TOOL_OUTSIDE_VARIABLE,
+  BT_TOOL_OUTSIDE_FILLED,
+  BT_TOOL_ALL_VARIABLE,       /* every non-empty voxel variable */
+  BT_TOOL_ALL_FILLED,         /* every non-empty voxel filled */
+  BT_TOOL_FILL_HOLES          /* fill empty voxels enclosed by the shape */
+};
+void bt_shape_tool(BTPuzzle *p, int shape, int tool);
 /* Mesh of a shape, centred on the origin. NULL if the shape is empty. */
 BTMesh *bt_shape_mesh(BTPuzzle *p, int shape);
 
@@ -69,6 +84,10 @@ void bt_problem_set_result(BTPuzzle *p, int prob, int shape);
 /* How many copies of `shape` the problem uses (0 = not used). */
 void bt_problem_shape_count(BTPuzzle *p, int prob, int shape, int *min, int *max);
 void bt_problem_set_shape_count(BTPuzzle *p, int prob, int shape, int min, int max);
+
+/* Maximum number of empty variable voxels allowed in a solution; -1 = no limit. */
+int bt_problem_max_holes(BTPuzzle *p, int prob);
+void bt_problem_set_max_holes(BTPuzzle *p, int prob, int holes);
 
 enum { BT_SOLVE_UNSOLVED = 0, BT_SOLVE_SOLVING, BT_SOLVE_SOLVED, BT_SOLVE_UNKNOWN };
 int bt_problem_solve_state(BTPuzzle *p, int prob);

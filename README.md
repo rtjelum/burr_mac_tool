@@ -21,8 +21,15 @@ What it does:
   launch it shows the Open dialog (File → New makes a new puzzle).
 * Shows shapes and solutions in 3D for every grid type (cubes, prisms,
   spheres, rhombic, tetra-octa).
-* Edits cube-grid shapes layer by layer (click or drag to add or remove cubes;
-  hold Option for variable cubes).
+* Edits cube-grid shapes layer by layer with a Filled / Variable / Empty pen
+  (hold Option for variable cubes).
+* Fill tools for whole shapes (all grids): fill or clear everything, fill
+  enclosed holes, make the inside or outside variable or filled, hollow out,
+  make all cubes variable or filled. "New Box…" makes a box that is solid,
+  hollow, all variable, or variable inside (a result shape whose centre may
+  stay empty, like Borneo).
+* Max holes per problem: how many variable cubes may stay empty (used when a
+  piece count is a range).
 * Sets up problems (result shape, how many copies of each piece) and solves
   them in the background, with progress, stop and continue.
 * Plays the disassembly of each solution as an animation.
