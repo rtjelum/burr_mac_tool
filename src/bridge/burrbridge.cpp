@@ -16,6 +16,8 @@
 #include "../halfedge/face.h"
 #include "../halfedge/halfedge.h"
 #include "../halfedge/vertex.h"
+#include "../halfedge/modifiers.h"
+#include "../lib/stl.h"
 #include "../tools/xml.h"
 #include "../tools/gzstream.h"
 
@@ -628,4 +630,106 @@ void bt_scene_piece_position(BTScene *s, int i, float *x, float *y, float *z, fl
   *y = py - s->cy;
   *z = pz - s->cz;
   *alpha = pc.alpha;
+}
+
+/* ---- STL export ---- */
+
+struct BTStl {
+  stlExporter_c *exporter;
+};
+
+void bt_shape_extent(BTPuzzle *p, int s, float *x, float *y, float *z) {
+  *x = *y = *z = 0;
+  if (!validShape(p, s)) return;
+  try {
+    Polyhedron *poly = p->puzzle->getShape(s)->getDrawingMesh();
+    if (!poly) return;
+    bool first = true;
+    float mn[3] = {0, 0, 0}, mx[3] = {0, 0, 0};
+    for (Polyhedron::const_vertex_iterator it = poly->vBegin(); it != poly->vEnd(); ++it) {
+      const Vector3Df &v = (*it)->position();
+      for (int i = 0; i < 3; i++) {
+        if (first || v[i] < mn[i]) mn[i] = v[i];
+        if (first || v[i] > mx[i]) mx[i] = v[i];
+      }
+      first = false;
+    }
+    delete poly;
+    *x = mx[0] - mn[0];
+    *y = mx[1] - mn[1];
+    *z = mx[2] - mn[2];
+  } catch (...) {}
+}
+
+int bt_puzzle_can_export_stl(BTPuzzle *p) {
+  return (p->puzzle->getGridType()->getCapabilities() & gridType_c::CAP_STLEXPORT) ? 1 : 0;
+}
+
+BTStl *bt_stl_create(BTPuzzle *p) {
+  if (!bt_puzzle_can_export_stl(p)) return 0;
+  try {
+    stlExporter_c *e = p->puzzle->getGridType()->getStlExporter();
+    if (!e) return 0;
+    BTStl *s = new BTStl;
+    s->exporter = e;
+    return s;
+  } catch (...) {
+    return 0;
+  }
+}
+
+void bt_stl_free(BTStl *s) {
+  if (!s) return;
+  delete s->exporter;
+  delete s;
+}
+
+static bool validParam(BTStl *s, int i) { return s && i >= 0 && (unsigned)i < s->exporter->numParameters(); }
+
+int bt_stl_param_count(BTStl *s) { return s ? (int)s->exporter->numParameters() : 0; }
+
+char *bt_stl_param_name(BTStl *s, int i) {
+  const char *n = validParam(s, i) ? s->exporter->getParameterName(i) : 0;
+  return dupString(n ? n : "");
+}
+
+char *bt_stl_param_tooltip(BTStl *s, int i) {
+  const char *n = validParam(s, i) ? s->exporter->getParameterTooltip(i) : 0;
+  return dupString(n ? n : "");
+}
+
+int bt_stl_param_type(BTStl *s, int i) { return validParam(s, i) ? (int)s->exporter->getParameterType(i) : 0; }
+double bt_stl_param_get(BTStl *s, int i) { return validParam(s, i) ? s->exporter->getParameter(i) : 0; }
+void bt_stl_param_set(BTStl *s, int i, double v) { if (validParam(s, i)) s->exporter->setParameter(i, v); }
+void bt_stl_set_binary(BTStl *s, int b) { if (s) s->exporter->setBinaryMode(b != 0); }
+
+BTMesh *bt_stl_mesh(BTStl *s, BTPuzzle *p, int shape, char **error) {
+  if (!s || !validShape(p, shape)) { setError(error, "No shape selected."); return 0; }
+  try {
+    faceList_c holes;
+    Polyhedron *poly = s->exporter->getMesh(*p->puzzle->getShape(shape), holes);
+    if (!poly) { setError(error, "Could not create the mesh."); return 0; }
+    BTMesh *m = meshFromPolyhedron(poly, 0, 0, 0);
+    delete poly;
+    if (!m) setError(error, "The shape is empty.");
+    return m;
+  }
+  catch (stlException_c &e) { setError(error, e.comment ? e.comment : "Could not create the mesh."); }
+  catch (assert_exception &e) { setError(error, describe(e)); }
+  catch (...) { setError(error, "The mesh could not be created with these settings. Try a smaller bevel or clearance."); }
+  return 0;
+}
+
+int bt_stl_write(BTStl *s, BTPuzzle *p, int shape, const char *path, char **error) {
+  if (!s || !validShape(p, shape)) { setError(error, "No shape selected."); return 0; }
+  if (bt_shape_voxel_count(p, shape) == 0) { setError(error, "The shape is empty."); return 0; }
+  try {
+    faceList_c holes;
+    s->exporter->write(path, *p->puzzle->getShape(shape), holes);
+    return 1;
+  }
+  catch (stlException_c &e) { setError(error, e.comment ? e.comment : "Could not write the STL file."); }
+  catch (assert_exception &e) { setError(error, describe(e)); }
+  catch (...) { setError(error, "The mesh could not be created with these settings. Try a smaller bevel or clearance."); }
+  return 0;
 }

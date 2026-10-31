@@ -206,13 +206,15 @@ void Polyhedron::finalize(void)
     // add the edge, to make sure we don't process it again
     handeled.insert(idx);
 
-    map<pair<int,int>, HalfEdge*>::iterator cit = connections.find(idx);
+    // lower_bound, not find: for a multimap, find may return any of the
+    // matching entries (newer libc++ does), but we need the first one
+    multimap<pair<int,int>, HalfEdge*>::iterator cit = connections.lower_bound(idx);
     // now we have the very first halfedge conection our 2 vertices, first let's count how many there are
 
     int n = 0;
     {
-      map<pair<int,int>, HalfEdge*>::iterator cit2 = cit;
-      while (cit2->first == idx)
+      multimap<pair<int,int>, HalfEdge*>::iterator cit2 = cit;
+      while (cit2 != connections.end() && cit2->first == idx)
       {
         n++;
         cit2++;
@@ -297,7 +299,7 @@ void Polyhedron::finalize(void)
       projection(cit->second->dst()->position(), A, Ox, Oy);
       float baseA = -1;
 
-      while (cit->first == idx)
+      while (cit != connections.end() && cit->first == idx)
       {
         float Px, Py;
         projection(cit->second->next()->dst()->position(), A, Px, Py);

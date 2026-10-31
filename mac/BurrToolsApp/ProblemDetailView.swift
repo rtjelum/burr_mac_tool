@@ -4,6 +4,7 @@ import SwiftUI
 struct ProblemDetailView: View {
     @ObservedObject var document: PuzzleDocument
     let problem: Int
+    var onExportStl: () -> Void = {}
     @Environment(\.undoManager) private var undo
     @StateObject private var name = ViewState<String>("")
     @StateObject private var options = ViewState<SolveOptions>(SolveOptions())
@@ -53,9 +54,14 @@ struct ProblemDetailView: View {
                                     pieceRow(shape)
                                 }
                             }
-                            Text("How many copies of each shape the solver may use.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            HStack(alignment: .firstTextBaseline) {
+                                Text("How many copies of each shape the solver may use.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Button("Export STL…", action: onExportStl)
+                                    .disabled(document.isSolving || bt_puzzle_can_export_stl(document.puzzle) == 0)
+                            }
                         }
                         .padding(6)
                         .frame(maxWidth: .infinity, alignment: .leading)

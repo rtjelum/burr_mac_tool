@@ -25,10 +25,14 @@ What it does:
 * Sets up problems (result shape, how many copies of each piece) and solves
   them in the background, with progress, stop and continue.
 * Plays the disassembly of each solution as an animation.
+* Exports pieces as STL files for 3D printing (File → Export STL…, ⇧⌘E).
+  Enter the size of the assembled puzzle and the clearance between pieces;
+  the app works out the unit size and face offset, shows the printed size of
+  each piece, and writes one file per shape.
 
 Not yet in the new app (use the old app for these): editing shapes on non-cube
 grids, piece groups, colour constraints, placement and movement browsers,
-STL/image export, and the shape-generating tools.
+image export, marking hole faces for hollow STL pieces, and the shape-generating tools.
 
 How it fits together: `Package.swift` builds the C++ library as the `BurrCore`
 target, with a small C interface in `src/bridge/`. The SwiftUI code is in

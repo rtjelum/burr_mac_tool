@@ -136,6 +136,30 @@ void bt_scene_set_step(BTScene *s, float step);
 /* Current position of piece i, already centred on the assembled puzzle. */
 void bt_scene_piece_position(BTScene *s, int piece, float *x, float *y, float *z, float *alpha);
 
+/* ---- STL export ---- */
+typedef struct BTStl BTStl;
+enum { BT_STL_DOUBLE = 0, BT_STL_POS_DOUBLE, BT_STL_POS_INTEGER, BT_STL_SWITCH };
+
+/* Size of a shape in grid drawing units (the 3D extent of its filled voxels).
+ * Multiply by the unit size (cube grids) or 2 x sphere radius (sphere grid)
+ * to get millimetres. */
+void bt_shape_extent(BTPuzzle *p, int shape, float *x, float *y, float *z);
+
+int bt_puzzle_can_export_stl(BTPuzzle *p);
+/* NULL if this grid type has no STL exporter. */
+BTStl *bt_stl_create(BTPuzzle *p);
+void bt_stl_free(BTStl *s);
+int bt_stl_param_count(BTStl *s);
+char *bt_stl_param_name(BTStl *s, int idx);
+char *bt_stl_param_tooltip(BTStl *s, int idx);
+int bt_stl_param_type(BTStl *s, int idx);
+double bt_stl_param_get(BTStl *s, int idx);
+void bt_stl_param_set(BTStl *s, int idx, double value);
+void bt_stl_set_binary(BTStl *s, int binary);
+/* The mesh that would be exported, in millimetres. NULL and *error on failure. */
+BTMesh *bt_stl_mesh(BTStl *s, BTPuzzle *p, int shape, char **error);
+int bt_stl_write(BTStl *s, BTPuzzle *p, int shape, const char *path, char **error);
+
 #ifdef __cplusplus
 }
 #endif

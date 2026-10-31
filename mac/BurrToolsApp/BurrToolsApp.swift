@@ -9,6 +9,32 @@ struct BurrToolsApp: App {
                 .frame(minWidth: 900, minHeight: 560)
         }
         .defaultSize(width: 1280, height: 800)
+        .commands {
+            CommandGroup(after: .importExport) {
+                ExportStlCommand()
+            }
+        }
+    }
+}
+
+struct ExportStlActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
+extension FocusedValues {
+    var exportStl: (() -> Void)? {
+        get { self[ExportStlActionKey.self] }
+        set { self[ExportStlActionKey.self] = newValue }
+    }
+}
+
+struct ExportStlCommand: View {
+    @FocusedValue(\.exportStl) private var exportStl
+
+    var body: some View {
+        Button("Export STL…") { exportStl?() }
+            .keyboardShortcut("e", modifiers: [.command, .shift])
+            .disabled(exportStl == nil)
     }
 }
 
@@ -22,6 +48,7 @@ struct ContentView: View {
     @ObservedObject var document: PuzzleDocument
     @Environment(\.undoManager) private var undo
     @StateObject private var selection = ViewState<SidebarItem?>(.info)
+    @StateObject private var showStlExport = ViewState<Bool>(false)
 
     var body: some View {
         let _ = document.revision
@@ -92,10 +119,14 @@ struct ContentView: View {
             case .shape(let i) where i < shapes.count:
                 ShapeDetailView(document: document, shape: i)
             case .problem(let i) where i < problems.count:
-                ProblemDetailView(document: document, problem: i)
+                ProblemDetailView(document: document, problem: i, onExportStl: { showStlExport.value = true })
             default:
                 PuzzleInfoView(document: document)
             }
+        }
+        .focusedSceneValue(\.exportStl, canExportStl ? { showStlExport.value = true } : nil)
+        .sheet(isPresented: $showStlExport.value) {
+            StlExportView(document: document, problem: stlProblem)
         }
         .alert("BurrTools", isPresented: Binding(get: { document.lastError != nil },
                                                   set: { if !$0 { document.lastError = nil } })) {
@@ -103,6 +134,17 @@ struct ContentView: View {
         } message: {
             Text(document.lastError ?? "")
         }
+    }
+
+    private var canExportStl: Bool {
+        !document.isSolving && bt_puzzle_can_export_stl(document.puzzle) != 0 && !document.shapes.isEmpty
+    }
+
+    /// The problem whose result shape sets the assembled size: the selected one,
+    /// or else the first problem that has a result shape.
+    private var stlProblem: Int? {
+        if case .problem(let i) = selection.value, i < document.problems.count { return i }
+        return document.problems.first { document.problemResult($0.id) != nil }?.id
     }
 
     private var isDeletable: Bool {
