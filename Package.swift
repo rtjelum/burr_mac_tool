@@ -27,7 +27,7 @@ let package = Package(
                 "lib",
                 "halfedge",
                 "tools/fileexists.cpp", "tools/gzstream.cpp", "tools/xml.cpp",
-                "bridge/burrbridge.cpp",
+                "bridge/burrbridge.cpp", "bridge/generator.cpp",
             ],
             publicHeadersPath: "bridge/include",
             cxxSettings: [

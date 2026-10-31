@@ -28,6 +28,14 @@ What it does:
   make all cubes variable or filled. "New Box…" makes a box that is solid,
   hollow, all variable, or variable inside (a result shape whose centre may
   stay empty, like Borneo).
+* Puzzle generator (+ → Generate Puzzle…): pick a final shape, the number of
+  pieces and the minimum number of moves (level, or total moves). It splits
+  the shape into connected pieces and searches in the background for a design
+  with one solution that reaches the target, checking every candidate with the
+  real solver. The best design can be added to the puzzle and is solved right
+  away. Note: a completely solid box only gives level-1 puzzles; for higher
+  levels the shape needs empty or variable space inside (e.g. Make Inside
+  Variable) or gaps.
 * Max holes per problem: how many variable cubes may stay empty (used when a
   piece count is a range).
 * Sets up problems (result shape, how many copies of each piece) and solves

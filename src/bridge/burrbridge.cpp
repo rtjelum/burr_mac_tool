@@ -1,6 +1,7 @@
 /* C interface to the BurrTools library, used by the Swift app. */
 
 #include "burrbridge.h"
+#include "internal.h"
 
 #include "../lib/puzzle.h"
 #include "../lib/problem.h"
@@ -29,9 +30,6 @@
 #include <thread>
 #include <vector>
 
-struct BTPuzzle {
-  puzzle_c *puzzle;
-};
 
 struct BTSolver {
   solveThread_c *thread;

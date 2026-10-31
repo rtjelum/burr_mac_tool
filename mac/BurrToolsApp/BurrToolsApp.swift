@@ -87,6 +87,7 @@ struct ContentView: View {
     @StateObject private var selection = ViewState<SidebarItem?>(.info)
     @StateObject private var showStlExport = ViewState<Bool>(false)
     @StateObject private var showNewBox = ViewState<Bool>(false)
+    @StateObject private var showGenerator = ViewState<Bool>(false)
 
     var body: some View {
         let _ = document.revision
@@ -128,6 +129,9 @@ struct ContentView: View {
                     Menu {
                         Button("New Shape") { addShape() }
                         Button("New Box…") { showNewBox.value = true }
+                        Divider()
+                        Button("Generate Puzzle…") { showGenerator.value = true }
+                            .disabled(document.shapes.isEmpty)
                         Button("New Problem") { addProblem() }
                     } label: {
                         Image(systemName: "plus")
@@ -164,6 +168,9 @@ struct ContentView: View {
             }
         }
         .focusedSceneValue(\.exportStl, canExportStl ? { showStlExport.value = true } : nil)
+        .sheet(isPresented: $showGenerator.value) {
+            GeneratorView(document: document) { selection.value = .problem($0) }
+        }
         .sheet(isPresented: $showNewBox.value) {
             NewBoxView(document: document) { selection.value = .shape($0) }
         }

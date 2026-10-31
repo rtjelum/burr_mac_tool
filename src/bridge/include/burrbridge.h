@@ -187,6 +187,37 @@ void bt_stl_set_binary(BTStl *s, int binary);
 BTMesh *bt_stl_mesh(BTStl *s, BTPuzzle *p, int shape, char **error);
 int bt_stl_write(BTStl *s, BTPuzzle *p, int shape, const char *path, char **error);
 
+/* ---- puzzle generator ---- */
+typedef struct BTGenerator BTGenerator;
+typedef struct {
+  long tried;          /* designs checked */
+  long valid;          /* designs that met the solution rule */
+  int running;
+  int found;           /* a design reached the target */
+  int haveBest;
+  int bestLevel;       /* moves until the first piece comes out */
+  int bestMoves;       /* moves for the whole disassembly */
+  int bestSolutions;
+} BTGeneratorStatus;
+
+/* Splits `shape` (its filled cubes) into `pieces` connected pieces of at least
+ * `minSize` cubes, searching in the background for a design whose level
+ * (metric 0) or total moves (metric 1) reaches `target`. With `unique`, only
+ * designs with exactly one solution count. seed 0 = random. */
+BTGenerator *bt_generator_start(BTPuzzle *p, int shape, int pieces, int target, int metric,
+                                int unique, int minSize, unsigned int seed, char **error);
+void bt_generator_status(BTGenerator *g, BTGeneratorStatus *status);
+char *bt_generator_error(BTGenerator *g);
+void bt_generator_stop(BTGenerator *g);
+/* Stops the search (waits for it) and frees the generator. */
+void bt_generator_free(BTGenerator *g);
+/* Best design so far as one piece number per voxel of the result shape (-1 =
+ * not part of a piece). Returns 0 if there is none yet. */
+int bt_generator_best(BTGenerator *g, int *out, int count);
+/* Adds the best design to the puzzle as new shapes and a new problem using
+ * `resultShape`. Returns the new problem index, or -1. */
+int bt_generator_add_best(BTGenerator *g, BTPuzzle *p, int resultShape);
+
 #ifdef __cplusplus
 }
 #endif
