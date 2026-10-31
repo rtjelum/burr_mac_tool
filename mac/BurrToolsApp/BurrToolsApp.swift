@@ -1,8 +1,39 @@
+import AppKit
 import BurrCore
 import SwiftUI
 
+/// Shows the Open dialog at launch instead of an empty "Untitled" puzzle.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { false }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // give macOS a moment to reopen windows or open files it was asked to
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { Self.showOpenIfNoDocuments() }
+    }
+
+    /// Clicking the Dock icon with no windows open shows the Open dialog too.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        if !hasVisibleWindows { Self.showOpenIfNoDocuments() }
+        return false
+    }
+
+    private static func showOpenIfNoDocuments() {
+        let controller = NSDocumentController.shared
+        // SwiftUI opens an empty "Untitled" puzzle at launch on its own (even when
+        // a file is being opened); close it if nothing has been done in it
+        controller.documents
+            .filter { $0.fileURL == nil && !$0.isDocumentEdited }
+            .forEach { $0.close() }
+        if controller.documents.isEmpty {
+            controller.openDocument(nil)
+        }
+    }
+}
+
 @main
 struct BurrToolsApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
     init() {
         if CommandLine.arguments.contains("--export-gif") {
             exit(CommandLineExport.run(CommandLine.arguments))

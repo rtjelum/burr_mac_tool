@@ -28,17 +28,17 @@ struct GifOptions {
         var id: String { rawValue }
     }
 
-    // defaults match scripts/burr2gif.py
+    // defaults: the studio look (applyDefaults(for: .classic) gives burr2gif's)
     var size = 1024                // pixels, square
-    var framesPerMove = 1          // 1 = one frame per move, like burr2gif
-    var moveTime = 0.2             // seconds per move
-    var startPause = 0.2           // seconds showing the assembled puzzle
-    var endPause = 0.2             // seconds on the last frame
-    var elevation = 35.0           // camera height in degrees (matplotlib elev)
+    var framesPerMove = 12         // 1 = one frame per move, like burr2gif
+    var moveTime = 0.8             // seconds per move
+    var startPause = 1.0           // seconds showing the assembled puzzle
+    var endPause = 2.0             // seconds on the last frame
+    var elevation = 32.0           // camera height in degrees
     var camera = Camera.follow
-    var colors = PieceColorStyle.vibrant
+    var colors = PieceColorStyle.toy
     var background = Background.dark
-    var style = Style.classic
+    var style = Style.studio
     var stillFrame: Int?           // only render this frame (for PNG output)
 
     /// Settings that suit each style; the studio look wants smooth motion.
@@ -395,7 +395,7 @@ final class GifRenderer {
 
         let (lo, hi) = stillBounds ?? (options.style == .studio ? studioBounds(frames) : animationBounds(frames))
         let center = (lo + hi) / 2
-        let fov = options.style == .studio ? 24.0 : 20.0
+        let fov = options.style == .studio ? 34.0 : 20.0
         let distance = fitDistance(lo: lo, hi: hi, center: center, frames: frames, fov: fov)
             * (options.style == .studio ? 1.12 : 1)
 
@@ -504,7 +504,7 @@ struct GifExportView: View {
     @StateObject private var progress = ViewState<Double?>(nil)
     @StateObject private var cancelled = CancelFlag()
     @StateObject private var message = ViewState<String?>(nil)
-    @StateObject private var movie = ViewState<Bool>(false)
+    @StateObject private var movie = ViewState<Bool>(true)
 
     final class CancelFlag: ObservableObject {
         private let lock = NSLock()

@@ -17,7 +17,8 @@ open build/BurrTools.app
 
 What it does:
 
-* Opens and saves `.xmpuzzle` files, with undo/redo for every change.
+* Opens and saves `.xmpuzzle` files, with undo/redo for every change. At
+  launch it shows the Open dialog (File → New makes a new puzzle).
 * Shows shapes and solutions in 3D for every grid type (cubes, prisms,
   spheres, rhombic, tetra-octa).
 * Edits cube-grid shapes layer by layer (click or drag to add or remove cubes;
@@ -25,19 +26,19 @@ What it does:
 * Sets up problems (result shape, how many copies of each piece) and solves
   them in the background, with progress, stop and continue.
 * Plays the disassembly of each solution as an animation.
-* Exports the disassembly as an animated GIF or MP4 video (Export GIF… under
+* Exports the disassembly as an MP4 video or animated GIF (Export GIF… under
   the solution viewer), in two looks:
+  * **Studio** (default): glossy toy-plastic pieces with rounded edges, studio
+    lighting, reflections, soft shadows and a dark smoky background. MP4 is the
+    default format; GIF's 256 colours make the soft gradients band.
   * **Classic**: like `scripts/burr2gif.py` (flat matplotlib-style cubes with
     grid lines, same camera angles and turns).
-  * **Studio**: glossy toy-plastic pieces with rounded edges, studio lighting,
-    reflections, soft shadows and a dark smoky background. Use MP4 for this
-    look; GIF's 256 colours make the soft gradients band.
 
   Also works from the command line, replacing `scripts/burr2gif.py`:
 
   ```sh
   build/BurrTools.app/Contents/MacOS/BurrTools --export-gif puzzle.xmpuzzle out.mp4 \
-      [--style classic|studio] [--problem N] [--solution N] [--size 1024] \
+      [--style studio|classic] [--problem N] [--solution N] [--size 1024] \
       [--frames-per-move N] [--camera follow|fixed|orbit] \
       [--colors vibrant|toy|burrtools] [--background dark|light|white] [--solve]
   ```

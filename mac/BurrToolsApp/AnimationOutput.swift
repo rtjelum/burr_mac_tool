@@ -205,16 +205,33 @@ enum StudioLook {
         let img = NSImage(size: NSSize(width: w, height: h))
         img.lockFocus()
         // NSImage y runs bottom to top; with the flip, the bottom rows are the sky
-        NSGradient(starting: NSColor(calibratedWhite: 0.22, alpha: 1), ending: NSColor(calibratedWhite: 0.02, alpha: 1))?
+        NSGradient(starting: NSColor(calibratedWhite: 0.07, alpha: 1), ending: NSColor(calibratedWhite: 0.0, alpha: 1))?
             .draw(in: NSRect(x: 0, y: 0, width: w, height: h), angle: 90)
+        // soft boxes with a bright core and a soft falloff: on glossy plastic they
+        // show up as smooth highlight gradients sweeping across the faces
         func softbox(_ r: NSRect, _ white: CGFloat) {
+            for i in 0..<12 {
+                let t = CGFloat(i) / 11
+                let inset = -t * 40
+                NSColor(calibratedWhite: white, alpha: 0.12 + 0.88 * (1 - t) * (1 - t)).setFill()
+                NSBezierPath(roundedRect: r.insetBy(dx: inset, dy: inset), xRadius: 40, yRadius: 40).fill()
+            }
             NSColor(calibratedWhite: white, alpha: 1).setFill()
             NSBezierPath(roundedRect: r, xRadius: 30, yRadius: 30).fill()
         }
-        softbox(NSRect(x: 60, y: 60, width: 360, height: 150), 1.0)     // key, high and wide
-        softbox(NSRect(x: 560, y: 90, width: 300, height: 110), 0.7)    // second box
-        softbox(NSRect(x: 0, y: 0, width: w, height: 40), 0.9)          // overhead strip
-        softbox(NSRect(x: 440, y: 210, width: 120, height: 60), 0.5)    // small accent
+        softbox(NSRect(x: 80, y: 50, width: 380, height: 170), 1.0)     // big key box, high front left
+        softbox(NSRect(x: 600, y: 80, width: 260, height: 120), 0.75)   // second box
+        softbox(NSRect(x: 300, y: 0, width: 420, height: 24), 0.8)     // overhead strip
+        softbox(NSRect(x: 470, y: 230, width: 110, height: 40), 0.6)    // low accent for edge glints
+        // a narrow bright strip about 30° below the horizon: side faces, seen from
+        // above, reflect it as a glossy streak across part of the face
+        for i in 0..<8 {
+            let t = CGFloat(i) / 7
+            NSColor(calibratedWhite: 1, alpha: 0.5 * (1 - t) * (1 - t)).setFill()
+            NSRect(x: 0, y: 342 - t * 18, width: CGFloat(w), height: 8 + t * 36).fill()
+        }
+        NSColor(calibratedWhite: 1, alpha: 1).setFill()
+        NSRect(x: 0, y: 344, width: CGFloat(w), height: 5).fill()
         img.unlockFocus()
         return img
     }
@@ -223,10 +240,10 @@ enum StudioLook {
         let m = SCNMaterial()
         m.lightingModel = .physicallyBased
         m.diffuse.contents = NSColor(srgbRed: CGFloat(c.r), green: CGFloat(c.g), blue: CGFloat(c.b), alpha: 1)
-        m.roughness.contents = 0.2
+        m.roughness.contents = 0.14
         m.metalness.contents = 0.0
         m.clearCoat.contents = 1.0
-        m.clearCoatRoughness.contents = 0.05
+        m.clearCoatRoughness.contents = 0.02
         m.isDoubleSided = true
         return m
     }
@@ -296,7 +313,7 @@ enum StudioLook {
                       shadow: (center: CGPoint, radii: CGSize)?) {
         scene.background.contents = background(size: size, shadow: shadow)
         scene.lightingEnvironment.contents = environment()
-        scene.lightingEnvironment.intensity = 2.0
+        scene.lightingEnvironment.intensity = 2.6
 
         let up = SIMD3<Float>(0, -1, 0)
 
@@ -324,12 +341,15 @@ enum StudioLook {
             scene.rootNode.addChildNode(node)
         }
         // key light from upper left front, a cooler fill from the right, a warm rim from behind
-        light(.directional, intensity: 1500, color: NSColor(srgbRed: 1, green: 0.97, blue: 0.92, alpha: 1),
+        light(.directional, intensity: 1300, color: NSColor(srgbRed: 1, green: 0.97, blue: 0.92, alpha: 1),
               from: SIMD3(0.5, 0, -1) + up * 1.6, shadows: true)
         light(.directional, intensity: 250, color: NSColor(srgbRed: 0.75, green: 0.85, blue: 1, alpha: 1),
               from: SIMD3(-1, 0, -0.1) + up * 0.3, shadows: false)
         light(.directional, intensity: 900, color: NSColor(srgbRed: 1, green: 0.82, blue: 0.6, alpha: 1),
               from: SIMD3(-0.6, 0, 1) + up * 1.0, shadows: false)
+        // small bright light high above the front, for crisp highlights on the rounded edges
+        light(.directional, intensity: 600, color: NSColor(calibratedWhite: 1, alpha: 1),
+              from: SIMD3(1, 0, 0.6) + up * 2.2, shadows: false)
         let ambient = SCNNode()
         ambient.light = SCNLight()
         ambient.light!.type = .ambient
