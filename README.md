@@ -41,7 +41,12 @@ What it does:
     drawn or the nearest place they fit.
   * **Start from** an existing solved design: reshape its pieces step by step
     instead of starting from random splits. Use this for tight designs such as
-    boxes, where random pieces almost never come apart. Note: a completely solid box only gives level-1 puzzles; for higher
+    boxes, where random pieces almost never come apart.
+  * **Compact pieces** (on by default): once a design reaches the target, it
+    keeps reshaping the pieces towards solid blocks, with fewer thin arms and
+    gaps, as long as the design still has one solution and reaches the target.
+    This takes a minute or two more; Add to Puzzle takes the best design so far.
+  Note: a completely solid box only gives level-1 puzzles; for higher
   levels the shape needs empty or variable space inside (e.g. Make Inside
   Variable) or gaps.
 * Max holes per problem: how many variable cubes may stay empty (used when a

@@ -23,7 +23,7 @@ final class GeneratorModel: ObservableObject {
     }
 
     func start(document: PuzzleDocument, shape: Int, pieces: Int, target: Int, totalMoves: Bool,
-               unique: Bool, minSize: Int, holes: Int, fixed: [Int], startProblem: Int?) {
+               unique: Bool, minSize: Int, holes: Int, fixed: [Int], startProblem: Int?, compact: Bool) {
         stop()
         bt_generator_free(handle)
         handle = nil
@@ -37,7 +37,7 @@ final class GeneratorModel: ObservableObject {
         guard let h = fixedIds.withUnsafeBufferPointer({ buf in
             bt_generator_start(document.puzzle, Int32(shape), Int32(pieces), Int32(target),
                                totalMoves ? 1 : 0, unique ? 1 : 0, Int32(minSize), Int32(holes),
-                               buf.baseAddress, Int32(buf.count), Int32(startProblem ?? -1), 0, &err)
+                               buf.baseAddress, Int32(buf.count), Int32(startProblem ?? -1), compact ? 1 : 0, 0, &err)
         }) else {
             error = takeString(err) ?? "Could not start the generator."
             return
@@ -61,7 +61,7 @@ final class GeneratorModel: ObservableObject {
         seconds = Int(Date().timeIntervalSince(started))
         if let e = takeString(bt_generator_error(handle)) { error = e }
         if s.haveBest != 0 {
-            let key = "\(s.bestLevel)-\(s.bestMoves)"
+            let key = "\(s.bestVersion)"
             if key != previewKey {
                 previewKey = key
                 updatePreview()
@@ -146,6 +146,7 @@ struct GeneratorView: View {
     @StateObject private var totalMoves = ViewState<Bool>(false)
     @StateObject private var unique = ViewState<Bool>(true)
     @StateObject private var minSize = ViewState<Int>(3)
+    @StateObject private var compact = ViewState<Bool>(true)
     @StateObject private var holes = ViewState<Int>(0)
     @StateObject private var fixed = ViewState<Set<Int>>([])
     @StateObject private var startProblem = ViewState<Int>(-1)
@@ -196,6 +197,8 @@ struct GeneratorView: View {
                     Stepper(value: $minSize.value, in: 1...20) {
                         LabeledContent("Smallest piece", value: "\(minSize.value) cubes")
                     }
+                    Toggle("Compact pieces", isOn: $compact.value)
+                        .help("After reaching the target, keep reshaping the pieces towards solid blocks, with fewer thin arms and gaps, without losing moves.")
                 }
                 .formStyle(.grouped)
                 .disabled(model.running)
@@ -304,7 +307,7 @@ struct GeneratorView: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     if model.running { ProgressView().controlSize(.small) }
-                    Text(model.running ? "Searching… \(formatTime(model.seconds))"
+                    Text(model.running ? (s.polishing != 0 ? "Target reached; making the pieces more compact… \(formatTime(model.seconds))" : "Searching… \(formatTime(model.seconds))")
                          : (s.found != 0 ? "Found a design that reaches the target." : "Stopped after \(formatTime(model.seconds))."))
                 }
                 Text("\(s.tried) designs checked, \(s.valid) with \(unique.value ? "one solution" : "a solution")")
@@ -371,7 +374,8 @@ struct GeneratorView: View {
     private func start() {
         model.start(document: document, shape: shape.value, pieces: pieces.value, target: target.value,
                     totalMoves: totalMoves.value, unique: unique.value, minSize: minSize.value, holes: holes.value,
-                    fixed: fixed.value.sorted(), startProblem: startProblem.value >= 0 ? startProblem.value : nil)
+                    fixed: fixed.value.sorted(), startProblem: startProblem.value >= 0 ? startProblem.value : nil,
+                    compact: compact.value)
     }
 
     private func add() {

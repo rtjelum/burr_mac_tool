@@ -27,6 +27,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <cmath>
 #include <mutex>
 #include <random>
 #include <string>
@@ -77,6 +78,10 @@ struct BTGenerator {
   voxel_c *result = 0;          // copy of the result shape
   int pieces, target, metric, minSize, holes;
   bool unique;
+  // score lost per fully spidery new piece. 0 while searching for the level
+  // (odd shapes help it get there); set when polishing a design that reached it
+  double compactWeight = 0;
+  bool compact = false;
 
   // starting pieces (e.g. a cage) that keep their shape; piece numbers
   // 0 .. nFixed-1 are these, nFixed .. total-1 are the generated pieces
@@ -100,7 +105,8 @@ struct BTGenerator {
   // status, guarded by lock
   std::mutex lock;
   long tried = 0, validFound = 0;
-  bool running = true, found = false, haveBest = false;
+  bool running = true, found = false, haveBest = false, polishing = false;
+  int bestVersion = 0;
   Evaluation best;
   std::vector<int> bestAssign;  // cell -> piece
   std::string error;
@@ -246,6 +252,39 @@ struct BTGenerator {
     return false;
   }
 
+  /* How far the new pieces are from compact lumps: 0 for block-like pieces,
+   * about 1 per piece that is all thin arms or full of gaps. Two parts:
+   * - thinness: cube-to-cube contacts compared to a cube-shaped piece of the
+   *   same size (a chain or branching "spider" has the fewest contacts)
+   * - gaps: the part of the piece's bounding box it does not fill */
+  double spideriness(const std::vector<int> &assign) const {
+    double total = 0;
+    for (int k = nFixed; k < this->total; k++) {
+      int n = 0, contacts = 0;
+      int lo[3] = {1 << 30, 1 << 30, 1 << 30}, hi[3] = {-(1 << 30), -(1 << 30), -(1 << 30)};
+      for (int c = 0; c < (int)assign.size(); c++) {
+        if (assign[c] != k) continue;
+        n++;
+        for (int nb : neighbours[c]) if (assign[nb] == k) contacts++;
+        for (int a = 0; a < 3; a++) { lo[a] = std::min(lo[a], cellPos[c][a]); hi[a] = std::max(hi[a], cellPos[c][a]); }
+      }
+      if (n < 3) continue;
+      contacts /= 2;
+      double gaps = 0;
+      double box = double(hi[0] - lo[0] + 1) * (hi[1] - lo[1] + 1) * (hi[2] - lo[2] + 1);
+      gaps = 1.0 - n / box;
+      double thin = 0;
+      if (gridType == gridType_c::GT_BRICKS) {
+        // a cube of n cubes has about 3n - 3n^(2/3) contacts; a chain has n - 1
+        double ideal = 3.0 * n - 3.0 * std::pow(double(n), 2.0 / 3.0);
+        double tree = n - 1;
+        if (ideal > tree) thin = std::max(0.0, std::min(1.0, (ideal - contacts) / (ideal - tree)));
+      }
+      total += 0.7 * thin + 0.5 * gaps;
+    }
+    return total;
+  }
+
   bool isConnected(const std::vector<int> &assign, int piece) const {
     int start = -1, count = 0;
     for (int c = 0; c < (int)assign.size(); c++)
@@ -368,18 +407,19 @@ struct BTGenerator {
 
       int mobility = 0;
       int free = freeGroups(assign, &mobility);
+      double shapePenalty = compactWeight > 0 ? compactWeight * spideriness(assign) : 0;
       if (cb.solutions == 0) {
         // Locked: no way apart. If no group can slide straight out either, it
         // is close to a higher-level design: score it between level 1 and 2,
         // higher the more pieces can shift a step, so the search can work
         // its way through locked designs to one that just comes apart.
-        if (metric == 0 && free == 0) e.score = 1000.0 + 25.0 * std::min(mobility, 30) - 760.0;
+        if (metric == 0 && free == 0) e.score = 1000.0 + 25.0 * std::min(mobility, 30) - 760.0 - shapePenalty;
         return e;
       }
       int main = metric == 0 ? e.level : e.moves;
       int other = metric == 0 ? e.moves : e.level;
       e.score = main * 1000.0 + std::min(other, 99) * 2.0 - (unique ? (cb.solutions - 1) * 3000.0 : 0)
-              - free * 40.0;
+              - free * 40.0 - shapePenalty;
     } catch (...) {
       e = Evaluation();
     }
@@ -444,7 +484,47 @@ struct BTGenerator {
       best = e;
       bestAssign = assign;
       haveBest = true;
+      bestVersion++;
       if (value(e) >= target) found = true;
+    }
+  }
+
+  /* After a design reaches the target: keep reshaping it towards compact
+   * pieces, accepting only changes that still reach the target. */
+  void polish() {
+    std::vector<int> current;
+    {
+      std::lock_guard<std::mutex> g(lock);
+      current = bestAssign;
+    }
+    compactWeight = 700;
+    Evaluation cur = evaluate(current);
+    {
+      std::lock_guard<std::mutex> g(lock);
+      best = cur;
+      polishing = true;
+    }
+    int stale = 0, patience = 200 + 50 * total;
+    while (!stopRequested && stale < patience) {
+      std::vector<int> candidate = current;
+      if (!mutate(candidate)) break;
+      Evaluation e = evaluate(candidate);
+      {
+        std::lock_guard<std::mutex> g(lock);
+        tried++;
+        if (e.valid) validFound++;
+      }
+      if (e.valid && value(e) >= target && e.score > cur.score) {
+        current = candidate;
+        cur = e;
+        stale = 0;
+        std::lock_guard<std::mutex> g(lock);
+        best = e;
+        bestAssign = candidate;
+        bestVersion++;
+      } else {
+        stale++;
+      }
     }
   }
 
@@ -489,7 +569,9 @@ struct BTGenerator {
       std::lock_guard<std::mutex> g(lock);
       if (found) break;
     }
+    if (found && compact && !stopRequested) polish();
     std::lock_guard<std::mutex> g(lock);
+    polishing = false;
     running = false;
   }
 };
@@ -498,7 +580,7 @@ extern "C" {
 
 BTGenerator *bt_generator_start(BTPuzzle *p, int shape, int pieces, int target, int metric,
                                 int unique, int minSize, int holes, const int *fixed, int fixedCount,
-                                int startProblem, unsigned int seed, char **error) {
+                                int startProblem, int compact, unsigned int seed, char **error) {
   auto fail = [&](const char *msg) -> BTGenerator * {
     if (error) { *error = (char *)malloc(strlen(msg) + 1); strcpy(*error, msg); }
     return 0;
@@ -519,6 +601,7 @@ BTGenerator *bt_generator_start(BTPuzzle *p, int shape, int pieces, int target, 
     g->metric = metric;
     g->unique = unique != 0;
     g->minSize = std::max(1, minSize);
+    g->compact = compact != 0;
     g->rng.seed(seed ? seed : std::random_device()());
 
     const voxel_c *v = g->result;
@@ -723,6 +806,8 @@ void bt_generator_status(BTGenerator *g, BTGeneratorStatus *s) {
   s->bestLevel = g->haveBest ? g->best.level : 0;
   s->bestMoves = g->haveBest ? g->best.moves : 0;
   s->bestSolutions = g->haveBest ? g->best.solutions : 0;
+  s->polishing = g->polishing ? 1 : 0;
+  s->bestVersion = g->bestVersion;
 }
 
 char *bt_generator_error(BTGenerator *g) {

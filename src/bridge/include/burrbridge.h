@@ -198,6 +198,8 @@ typedef struct {
   int bestLevel;       /* moves until the first piece comes out */
   int bestMoves;       /* moves for the whole disassembly */
   int bestSolutions;
+  int polishing;       /* target reached; now making the pieces more compact */
+  int bestVersion;     /* changes whenever the best design changes */
 } BTGeneratorStatus;
 
 /* Splits `shape` (all its filled and variable cubes, except `holes` variable
@@ -210,10 +212,13 @@ typedef struct {
  * pieces fill the space that is left.
  * `startProblem` >= 0: start from the pieces of that problem's first saved
  * solution (it must use the same final shape) and reshape them step by step;
- * `pieces` and `holes` then come from that design. seed 0 = random. */
+ * `pieces` and `holes` then come from that design.
+ * `compact`: once a design reaches the target, keep reshaping it towards
+ * block-like pieces (fewer thin arms and gaps) while it still reaches the
+ * target. seed 0 = random. */
 BTGenerator *bt_generator_start(BTPuzzle *p, int shape, int pieces, int target, int metric,
                                 int unique, int minSize, int holes, const int *fixed, int fixedCount,
-                                int startProblem, unsigned int seed, char **error);
+                                int startProblem, int compact, unsigned int seed, char **error);
 void bt_generator_status(BTGenerator *g, BTGeneratorStatus *status);
 char *bt_generator_error(BTGenerator *g);
 void bt_generator_stop(BTGenerator *g);
