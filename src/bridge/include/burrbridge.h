@@ -201,12 +201,19 @@ typedef struct {
 } BTGeneratorStatus;
 
 /* Splits `shape` (all its filled and variable cubes, except `holes` variable
- * cubes that stay empty) into `pieces` connected pieces of at least `minSize`
- * cubes, searching in the background for a design whose level (metric 0) or
- * total moves (metric 1) reaches `target`. With `unique`, only designs with
- * exactly one solution count. seed 0 = random. */
+ * cubes that stay empty) into `pieces` new connected pieces of at least
+ * `minSize` cubes, searching in the background for a design whose level
+ * (metric 0) or total moves (metric 1) reaches `target`. With `unique`, only
+ * designs with exactly one solution count.
+ * `fixed`: shapes used as starting pieces (e.g. a cage). They keep their shape
+ * and are placed where they are drawn, or the nearest place they fit; the new
+ * pieces fill the space that is left.
+ * `startProblem` >= 0: start from the pieces of that problem's first saved
+ * solution (it must use the same final shape) and reshape them step by step;
+ * `pieces` and `holes` then come from that design. seed 0 = random. */
 BTGenerator *bt_generator_start(BTPuzzle *p, int shape, int pieces, int target, int metric,
-                                int unique, int minSize, int holes, unsigned int seed, char **error);
+                                int unique, int minSize, int holes, const int *fixed, int fixedCount,
+                                int startProblem, unsigned int seed, char **error);
 void bt_generator_status(BTGenerator *g, BTGeneratorStatus *status);
 char *bt_generator_error(BTGenerator *g);
 void bt_generator_stop(BTGenerator *g);

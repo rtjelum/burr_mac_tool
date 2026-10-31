@@ -34,7 +34,14 @@ What it does:
   cubes empty, like Borneo) into connected pieces and searches in the background for a design
   with one solution that reaches the target, checking every candidate with the
   real solver. The best design can be added to the puzzle and is solved right
-  away. Note: a completely solid box only gives level-1 puzzles; for higher
+  away. Options:
+  * **Starting pieces**: keep shapes such as a cage or box unchanged and
+    generate only the pieces that fill the rest. They are placed as in a saved
+    solution of a problem with the same final shape, otherwise where they are
+    drawn or the nearest place they fit.
+  * **Start from** an existing solved design: reshape its pieces step by step
+    instead of starting from random splits. Use this for tight designs such as
+    boxes, where random pieces almost never come apart. Note: a completely solid box only gives level-1 puzzles; for higher
   levels the shape needs empty or variable space inside (e.g. Make Inside
   Variable) or gaps.
 * Max holes per problem: how many variable cubes may stay empty (used when a

@@ -23,7 +23,7 @@ final class GeneratorModel: ObservableObject {
     }
 
     func start(document: PuzzleDocument, shape: Int, pieces: Int, target: Int, totalMoves: Bool,
-               unique: Bool, minSize: Int, holes: Int) {
+               unique: Bool, minSize: Int, holes: Int, fixed: [Int], startProblem: Int?) {
         stop()
         bt_generator_free(handle)
         handle = nil
@@ -33,8 +33,12 @@ final class GeneratorModel: ObservableObject {
         let info = document.shape(shape)
         size = info.size
         var err: UnsafeMutablePointer<CChar>?
-        guard let h = bt_generator_start(document.puzzle, Int32(shape), Int32(pieces), Int32(target),
-                                         totalMoves ? 1 : 0, unique ? 1 : 0, Int32(minSize), Int32(holes), 0, &err) else {
+        let fixedIds = fixed.map { Int32($0) }
+        guard let h = fixedIds.withUnsafeBufferPointer({ buf in
+            bt_generator_start(document.puzzle, Int32(shape), Int32(pieces), Int32(target),
+                               totalMoves ? 1 : 0, unique ? 1 : 0, Int32(minSize), Int32(holes),
+                               buf.baseAddress, Int32(buf.count), Int32(startProblem ?? -1), 0, &err)
+        }) else {
             error = takeString(err) ?? "Could not start the generator."
             return
         }
@@ -143,6 +147,8 @@ struct GeneratorView: View {
     @StateObject private var unique = ViewState<Bool>(true)
     @StateObject private var minSize = ViewState<Int>(3)
     @StateObject private var holes = ViewState<Int>(0)
+    @StateObject private var fixed = ViewState<Set<Int>>([])
+    @StateObject private var startProblem = ViewState<Int>(-1)
 
     var body: some View {
         let shapes = document.shapes.filter { $0.voxels > 0 }
@@ -158,7 +164,7 @@ struct GeneratorView: View {
                         Text("Choose…").tag(-1)
                         ForEach(shapes) { Text("\($0.displayName) (\($0.voxels) cubes)").tag($0.id) }
                     }
-                    if counts.variable > 0 {
+                    if counts.variable > 0 && startProblem.value < 0 {
                         Stepper(value: $holes.value, in: 0...counts.variable) {
                             LabeledContent("Empty cubes", value: "\(holes.value) of \(counts.variable) variable")
                         }
@@ -167,9 +173,18 @@ struct GeneratorView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                    Stepper(value: $pieces.value, in: 2...16) {
-                        LabeledContent("Pieces", value: "\(pieces.value)")
+                    if !startDesigns.isEmpty {
+                        Picker("Start from", selection: $startProblem.value) {
+                            Text("A random split").tag(-1)
+                            ForEach(startDesigns) { Text("The pieces of \($0.displayName)").tag($0.id) }
+                        }
+                        .help("Start from an existing design and reshape its pieces step by step. Works much better than random splits for tight designs such as boxes.")
                     }
+                    Stepper(value: $pieces.value, in: (fixed.value.isEmpty ? 2 : 1)...16) {
+                        LabeledContent(fixed.value.isEmpty ? "Pieces" : "New pieces", value: "\(pieces.value)")
+                    }
+                    .disabled(startProblem.value >= 0)
+                    startingPieces(shapes)
                     Stepper(value: $target.value, in: 1...200) {
                         LabeledContent("At least", value: "\(target.value) moves")
                     }
@@ -185,7 +200,14 @@ struct GeneratorView: View {
                 .formStyle(.grouped)
                 .disabled(model.running)
 
-                if let warning = solidWarning {
+                if startProblem.value >= 0 {
+                    Text("The number of pieces and empty cubes come from that design. Tick its cage or box under Starting pieces to keep it unchanged.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if let warning = solidWarning, startProblem.value < 0 {
                     Label(warning, systemImage: "exclamationmark.triangle")
                         .font(.callout)
                         .foregroundStyle(.orange)
@@ -243,6 +265,39 @@ struct GeneratorView: View {
         }
     }
 
+    /// Solved problems with the chosen final shape; their pieces can be the start.
+    private var startDesigns: [ProblemInfo] {
+        document.problems.filter {
+            document.problemResult($0.id) == shape.value
+                && bt_problem_saved_solution_count(document.puzzle, Int32($0.id)) > 0
+        }
+    }
+
+    /// Shapes to keep as they are (e.g. a cage); the new pieces fill the rest.
+    @ViewBuilder private func startingPieces(_ shapes: [ShapeInfo]) -> some View {
+        let candidates = shapes.filter { $0.id != shape.value }
+        if !candidates.isEmpty {
+            DisclosureGroup("Starting pieces (\(fixed.value.count))") {
+                ForEach(candidates) { s in
+                    Toggle(isOn: Binding(get: { fixed.value.contains(s.id) },
+                                         set: { on in
+                                             if on { fixed.value.insert(s.id) } else { fixed.value.remove(s.id) }
+                                             if !fixed.value.isEmpty { pieces.value = max(1, pieces.value) }
+                                         })) {
+                        HStack {
+                            ColorSwatch(shape: s.id)
+                            Text("\(s.displayName) (\(s.voxels) cubes)")
+                        }
+                    }
+                }
+                Text("Kept as they are, e.g. a cage or box; the new pieces fill the space that is left. Each is placed where it is drawn, or the nearest place it fits in the same orientation.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
     @ViewBuilder private var statusView: some View {
         let s = model.status
         if model.running || s.tried > 0 {
@@ -279,6 +334,8 @@ struct GeneratorView: View {
     /// When a problem already uses this shape as its result, start from its
     /// number of pieces and the empty space its pieces leave.
     private func applyDefaults() {
+        fixed.value.remove(shape.value)
+        startProblem.value = -1
         let c = counts
         holes.value = 0
         guard c.variable > 0 else { return }
@@ -313,7 +370,8 @@ struct GeneratorView: View {
 
     private func start() {
         model.start(document: document, shape: shape.value, pieces: pieces.value, target: target.value,
-                    totalMoves: totalMoves.value, unique: unique.value, minSize: minSize.value, holes: holes.value)
+                    totalMoves: totalMoves.value, unique: unique.value, minSize: minSize.value, holes: holes.value,
+                    fixed: fixed.value.sorted(), startProblem: startProblem.value >= 0 ? startProblem.value : nil)
     }
 
     private func add() {
