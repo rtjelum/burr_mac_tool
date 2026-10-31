@@ -73,13 +73,14 @@ struct BTGenerator {
   // settings
   gridType_c::gridType gridType;
   voxel_c *result = 0;          // copy of the result shape
-  int pieces, target, metric, minSize;
+  int pieces, target, metric, minSize, holes;
   bool unique;
 
   // the cells to split (filled voxels of the result) and their neighbours
   std::vector<int> cellVoxel;              // cell -> voxel index in the result
   std::vector<std::vector<int>> neighbours;
   std::vector<int> voxelCell;              // voxel index -> cell, or -1
+  std::vector<char> variableCell;          // cell may be left empty
 
   std::mt19937 rng;
   std::thread worker;
@@ -97,15 +98,26 @@ struct BTGenerator {
 
   // ---- splitting ----
 
+  /* assign[c]: piece number, or HOLE for a variable cube left empty */
+  static constexpr int HOLE = -1;
+  static constexpr int UNASSIGNED = -2;
+
   bool randomSplit(std::vector<int> &assign) {
     int n = (int)cellVoxel.size();
-    for (int attempt = 0; attempt < 200; attempt++) {
-      assign.assign(n, -1);
+    std::vector<int> variableCells;
+    for (int c = 0; c < n; c++) if (variableCell[c]) variableCells.push_back(c);
+
+    for (int attempt = 0; attempt < 400; attempt++) {
+      assign.assign(n, UNASSIGNED);
+
+      // pick the holes among the variable cubes
+      std::shuffle(variableCells.begin(), variableCells.end(), rng);
+      for (int h = 0; h < holes; h++) assign[variableCells[h]] = HOLE;
+
       std::vector<int> size(pieces, 0);
       std::vector<std::vector<int>> frontier(pieces);
-
-      std::vector<int> order(n);
-      for (int i = 0; i < n; i++) order[i] = i;
+      std::vector<int> order;
+      for (int c = 0; c < n; c++) if (assign[c] == UNASSIGNED) order.push_back(c);
       std::shuffle(order.begin(), order.end(), rng);
       for (int k = 0; k < pieces; k++) {
         assign[order[k]] = k;
@@ -113,7 +125,7 @@ struct BTGenerator {
         frontier[k] = neighbours[order[k]];
       }
 
-      int left = n - pieces;
+      int left = (int)order.size() - pieces;
       int stuck = 0;
       while (left > 0 && stuck < n * 4) {
         // grow a piece; smaller pieces are more likely to grow, but sizes still vary
@@ -132,17 +144,17 @@ struct BTGenerator {
           int c = f[i];
           f[i] = f.back();
           f.pop_back();
-          if (assign[c] != -1) continue;
+          if (assign[c] != UNASSIGNED) continue;
           assign[c] = k;
           size[k]++;
           left--;
-          for (int nb : neighbours[c]) if (assign[nb] == -1) f.push_back(nb);
+          for (int nb : neighbours[c]) if (assign[nb] == UNASSIGNED) f.push_back(nb);
           grew = true;
           break;
         }
         stuck = grew ? 0 : stuck + 1;
       }
-      if (left > 0) continue;
+      if (left > 0) continue;   // the holes cut some cubes off; try again
       bool ok = true;
       for (int k = 0; k < pieces; k++) if (size[k] < minSize) ok = false;
       if (ok) return true;
@@ -150,10 +162,10 @@ struct BTGenerator {
     return false;
   }
 
-  bool connectedWithout(const std::vector<int> &assign, int piece, int removed) {
+  bool isConnected(const std::vector<int> &assign, int piece) const {
     int start = -1, count = 0;
     for (int c = 0; c < (int)assign.size(); c++)
-      if (assign[c] == piece && c != removed) { count++; if (start < 0) start = c; }
+      if (assign[c] == piece) { count++; if (start < 0) start = c; }
     if (count == 0) return false;
     std::vector<char> seen(assign.size(), 0);
     std::vector<int> stack(1, start);
@@ -164,29 +176,58 @@ struct BTGenerator {
       stack.pop_back();
       reached++;
       for (int nb : neighbours[c])
-        if (!seen[nb] && nb != removed && assign[nb] == piece) { seen[nb] = 1; stack.push_back(nb); }
+        if (!seen[nb] && assign[nb] == piece) { seen[nb] = 1; stack.push_back(nb); }
     }
     return reached == count;
   }
 
-  /* move one to three boundary cubes to a neighbouring piece */
+  /* one or two small changes: a boundary cube moves to a neighbouring piece,
+   * or a hole moves (a piece takes the hole's place and gives up another
+   * variable cube) */
   bool mutate(std::vector<int> &assign) {
+    int n = (int)assign.size();
     std::vector<int> size(pieces, 0);
-    for (int a : assign) size[a]++;
+    for (int a : assign) if (a >= 0) size[a]++;
     int moves = 1 + std::uniform_int_distribution<int>(0, 2)(rng) / 2;
     int done = 0;
-    for (int tries = 0; tries < 200 && done < moves; tries++) {
-      int c = std::uniform_int_distribution<int>(0, (int)assign.size() - 1)(rng);
-      const auto &nb = neighbours[c];
-      if (nb.empty()) continue;
-      int other = assign[nb[std::uniform_int_distribution<int>(0, (int)nb.size() - 1)(rng)]];
-      int from = assign[c];
-      if (other == from || size[from] <= minSize) continue;
-      if (!connectedWithout(assign, from, c)) continue;
-      assign[c] = other;
-      size[from]--;
-      size[other]++;
-      done++;
+    for (int tries = 0; tries < 300 && done < moves; tries++) {
+      if (holes > 0 && std::uniform_int_distribution<int>(0, 2)(rng) == 0) {
+        // move a hole
+        int h = std::uniform_int_distribution<int>(0, n - 1)(rng);
+        if (assign[h] != HOLE || neighbours[h].empty()) continue;
+        int k = assign[neighbours[h][std::uniform_int_distribution<int>(0, (int)neighbours[h].size() - 1)(rng)]];
+        if (k < 0) continue;
+        int c = std::uniform_int_distribution<int>(0, n - 1)(rng);
+        int p = assign[c];
+        if (p < 0 || !variableCell[c] || c == h) continue;
+        if (p != k && size[p] <= minSize) continue;
+        assign[h] = k;
+        assign[c] = HOLE;
+        if (!isConnected(assign, p) || !isConnected(assign, k)) {
+          assign[c] = p;
+          assign[h] = HOLE;
+          continue;
+        }
+        size[k]++;
+        size[p]--;
+        done++;
+      } else {
+        // move a boundary cube to a neighbouring piece
+        int c = std::uniform_int_distribution<int>(0, n - 1)(rng);
+        int from = assign[c];
+        const auto &nb = neighbours[c];
+        if (from < 0 || nb.empty()) continue;
+        int other = assign[nb[std::uniform_int_distribution<int>(0, (int)nb.size() - 1)(rng)]];
+        if (other < 0 || other == from || size[from] <= minSize) continue;
+        assign[c] = other;
+        if (!isConnected(assign, from)) {
+          assign[c] = from;
+          continue;
+        }
+        size[from]--;
+        size[other]++;
+        done++;
+      }
     }
     return done > 0;
   }
@@ -265,7 +306,7 @@ struct BTGenerator {
     const int dirs[6][3] = { {1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0}, {0,0,1}, {0,0,-1} };
     int sx = result->getX(), sy = result->getY(), sz = result->getZ();
     std::vector<int> owner(result->getXYZ(), -1);
-    for (int c = 0; c < (int)assign.size(); c++) owner[cellVoxel[c]] = assign[c];
+    for (int c = 0; c < (int)assign.size(); c++) owner[cellVoxel[c]] = assign[c];   // holes stay -1
     const uint64_t all = pieces == 64 ? ~0ull : ((1ull << pieces) - 1);
     int free = 0;
     for (const auto &d : dirs) {
@@ -274,6 +315,7 @@ struct BTGenerator {
       std::vector<char> stepBlocked(pieces, 0);   // can't move even one step
       for (int c = 0; c < (int)assign.size(); c++) {
         int k = assign[c];
+        if (k < 0) continue;
         unsigned int x, y, z;
         result->indexToXYZ(cellVoxel[c], &x, &y, &z);
         int px = x + d[0], py = y + d[1], pz = z + d[2];
@@ -348,7 +390,7 @@ struct BTGenerator {
 extern "C" {
 
 BTGenerator *bt_generator_start(BTPuzzle *p, int shape, int pieces, int target, int metric,
-                                int unique, int minSize, unsigned int seed, char **error) {
+                                int unique, int minSize, int holes, unsigned int seed, char **error) {
   auto fail = [&](const char *msg) -> BTGenerator * {
     if (error) { *error = (char *)malloc(strlen(msg) + 1); strcpy(*error, msg); }
     return 0;
@@ -375,12 +417,17 @@ BTGenerator *bt_generator_start(BTPuzzle *p, int shape, int pieces, int target, 
     for (unsigned int z = 0; z < v->getZ(); z++)
       for (unsigned int y = 0; y < v->getY(); y++)
         for (unsigned int x = 0; x < v->getX(); x++)
-          if (v->isFilled(x, y, z)) {
+          if (!v->isEmpty(x, y, z)) {
             g->voxelCell[v->getIndex(x, y, z)] = (int)g->cellVoxel.size();
             g->cellVoxel.push_back(v->getIndex(x, y, z));
+            g->variableCell.push_back(v->isVariable(x, y, z) ? 1 : 0);
           }
     int n = (int)g->cellVoxel.size();
-    if (n < pieces * g->minSize) { delete g; return fail("The shape has too few filled cubes for that many pieces."); }
+    int variables = 0;
+    for (char c : g->variableCell) variables += c;
+    g->holes = std::max(0, std::min(holes, variables));
+    if (holes > variables) { delete g; return fail("There are fewer variable cubes than empty cubes asked for."); }
+    if (n - g->holes < pieces * g->minSize) { delete g; return fail("The shape has too few cubes for that many pieces of the smallest size."); }
 
     g->neighbours.resize(n);
     for (int c = 0; c < n; c++) {

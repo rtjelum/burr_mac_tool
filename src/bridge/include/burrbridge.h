@@ -200,12 +200,13 @@ typedef struct {
   int bestSolutions;
 } BTGeneratorStatus;
 
-/* Splits `shape` (its filled cubes) into `pieces` connected pieces of at least
- * `minSize` cubes, searching in the background for a design whose level
- * (metric 0) or total moves (metric 1) reaches `target`. With `unique`, only
- * designs with exactly one solution count. seed 0 = random. */
+/* Splits `shape` (all its filled and variable cubes, except `holes` variable
+ * cubes that stay empty) into `pieces` connected pieces of at least `minSize`
+ * cubes, searching in the background for a design whose level (metric 0) or
+ * total moves (metric 1) reaches `target`. With `unique`, only designs with
+ * exactly one solution count. seed 0 = random. */
 BTGenerator *bt_generator_start(BTPuzzle *p, int shape, int pieces, int target, int metric,
-                                int unique, int minSize, unsigned int seed, char **error);
+                                int unique, int minSize, int holes, unsigned int seed, char **error);
 void bt_generator_status(BTGenerator *g, BTGeneratorStatus *status);
 char *bt_generator_error(BTGenerator *g);
 void bt_generator_stop(BTGenerator *g);

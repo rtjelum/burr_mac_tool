@@ -23,7 +23,7 @@ final class GeneratorModel: ObservableObject {
     }
 
     func start(document: PuzzleDocument, shape: Int, pieces: Int, target: Int, totalMoves: Bool,
-               unique: Bool, minSize: Int) {
+               unique: Bool, minSize: Int, holes: Int) {
         stop()
         bt_generator_free(handle)
         handle = nil
@@ -34,7 +34,7 @@ final class GeneratorModel: ObservableObject {
         size = info.size
         var err: UnsafeMutablePointer<CChar>?
         guard let h = bt_generator_start(document.puzzle, Int32(shape), Int32(pieces), Int32(target),
-                                         totalMoves ? 1 : 0, unique ? 1 : 0, Int32(minSize), 0, &err) else {
+                                         totalMoves ? 1 : 0, unique ? 1 : 0, Int32(minSize), Int32(holes), 0, &err) else {
             error = takeString(err) ?? "Could not start the generator."
             return
         }
@@ -142,6 +142,7 @@ struct GeneratorView: View {
     @StateObject private var totalMoves = ViewState<Bool>(false)
     @StateObject private var unique = ViewState<Bool>(true)
     @StateObject private var minSize = ViewState<Int>(3)
+    @StateObject private var holes = ViewState<Int>(0)
 
     var body: some View {
         let shapes = document.shapes.filter { $0.voxels > 0 }
@@ -153,9 +154,18 @@ struct GeneratorView: View {
                     .fixedSize(horizontal: false, vertical: true)
 
                 Form {
-                    Picker("Final shape", selection: $shape.value) {
+                    Picker("Final shape", selection: Binding(get: { shape.value }, set: { shape.value = $0; applyDefaults() })) {
                         Text("Choose…").tag(-1)
                         ForEach(shapes) { Text("\($0.displayName) (\($0.voxels) cubes)").tag($0.id) }
+                    }
+                    if counts.variable > 0 {
+                        Stepper(value: $holes.value, in: 0...counts.variable) {
+                            LabeledContent("Empty cubes", value: "\(holes.value) of \(counts.variable) variable")
+                        }
+                        .help("How many of the shape's variable cubes stay empty. Empty space inside lets pieces move, which allows higher levels.")
+                        Text("The pieces fill \(counts.filled + counts.variable - holes.value) of the shape's \(counts.filled + counts.variable) cubes.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                     Stepper(value: $pieces.value, in: 2...16) {
                         LabeledContent("Pieces", value: "\(pieces.value)")
@@ -228,6 +238,7 @@ struct GeneratorView: View {
                 // default: the result shape of the first problem, else the largest shape
                 shape.value = document.problems.compactMap { document.problemResult($0.id) }.first
                     ?? shapes.max(by: { $0.voxels < $1.voxels })?.id ?? -1
+                applyDefaults()
             }
         }
     }
@@ -253,26 +264,56 @@ struct GeneratorView: View {
         }
     }
 
-    /// A shape with no empty space inside its bounding box only gives level-1 puzzles.
-    private var solidWarning: String? {
-        guard shape.value >= 0, !totalMoves.value, target.value > 1, document.gridType == .bricks else { return nil }
+    /// Fixed and variable cubes of the chosen shape, and its bounding box volume.
+    private var counts: (filled: Int, variable: Int, box: Int) {
+        guard shape.value >= 0, shape.value < document.shapes.count else { return (0, 0, 0) }
         let info = document.shape(shape.value)
         var filled = 0, variable = 0
         for z in 0..<info.size.z { for y in 0..<info.size.y { for x in 0..<info.size.x {
             let v = document.voxel(shape.value, x, y, z)
             if v == BT_VOXEL_FILLED { filled += 1 } else if v == BT_VOXEL_VARIABLE { variable += 1 }
         } } }
-        // empty cells inside the bounding box give pieces room to move
-        let box = info.size.x * info.size.y * info.size.z
-        if variable == 0 && filled == box {
-            return "A solid box can only give level-1 puzzles: there is no room inside for pieces to move. Make the inside variable (Fill → Make Inside Variable) or use a shape with gaps."
+        return (filled, variable, info.size.x * info.size.y * info.size.z)
+    }
+
+    /// When a problem already uses this shape as its result, start from its
+    /// number of pieces and the empty space its pieces leave.
+    private func applyDefaults() {
+        let c = counts
+        holes.value = 0
+        guard c.variable > 0 else { return }
+        holes.value = min(c.variable, max(0, Int((Double(c.variable) * 0.15).rounded())))
+        for problem in document.problems where document.problemResult(problem.id) == shape.value {
+            var volume = 0, count = 0
+            for s in document.shapes where s.id != shape.value {
+                let n = document.problemShapeCount(problem.id, s.id).max
+                volume += n * s.voxels
+                count += n
+            }
+            if count >= 2 && volume > 0 && volume <= c.filled + c.variable {
+                pieces.value = min(16, count)
+                holes.value = min(c.variable, c.filled + c.variable - volume)
+                return
+            }
+        }
+    }
+
+    /// A shape with no empty space inside its bounding box only gives level-1 puzzles.
+    private var solidWarning: String? {
+        guard shape.value >= 0, !totalMoves.value, target.value > 1, document.gridType == .bricks else { return nil }
+        let c = counts
+        // empty cubes inside the bounding box give pieces room to move
+        if c.filled + c.variable == c.box && holes.value == 0 {
+            return c.variable > 0
+                ? "With no empty cubes the shape is a solid box, which only gives level-1 puzzles. Leave some variable cubes empty."
+                : "A solid box can only give level-1 puzzles: there is no room inside for pieces to move. Make the inside variable (Fill → Make Inside Variable) or use a shape with gaps."
         }
         return nil
     }
 
     private func start() {
         model.start(document: document, shape: shape.value, pieces: pieces.value, target: target.value,
-                    totalMoves: totalMoves.value, unique: unique.value, minSize: minSize.value)
+                    totalMoves: totalMoves.value, unique: unique.value, minSize: minSize.value, holes: holes.value)
     }
 
     private func add() {

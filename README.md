@@ -30,7 +30,8 @@ What it does:
   stay empty, like Borneo).
 * Puzzle generator (+ → Generate Puzzle…): pick a final shape, the number of
   pieces and the minimum number of moves (level, or total moves). It splits
-  the shape into connected pieces and searches in the background for a design
+  the shape's cubes (fixed and variable, leaving a chosen number of variable
+  cubes empty, like Borneo) into connected pieces and searches in the background for a design
   with one solution that reaches the target, checking every candidate with the
   real solver. The best design can be added to the puzzle and is solved right
   away. Note: a completely solid box only gives level-1 puzzles; for higher
