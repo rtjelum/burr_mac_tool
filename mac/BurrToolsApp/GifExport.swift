@@ -21,12 +21,13 @@ struct GifOptions {
         var id: String { rawValue }
     }
 
-    var size = 800                 // pixels, square
-    var framesPerMove = 4          // 1 = one frame per move, like burr2gif
-    var moveTime = 0.6             // seconds per move
-    var startPause = 1.0           // seconds showing the assembled puzzle
-    var endPause = 2.0             // seconds on the last frame
-    var elevation = 30.0           // camera height in degrees
+    // defaults match scripts/burr2gif.py
+    var size = 1024                // pixels, square
+    var framesPerMove = 1          // 1 = one frame per move, like burr2gif
+    var moveTime = 0.2             // seconds per move
+    var startPause = 0.2           // seconds showing the assembled puzzle
+    var endPause = 0.2             // seconds on the last frame
+    var elevation = 35.0           // camera height in degrees (matplotlib elev)
     var camera = Camera.follow
     var colors = PieceColorStyle.vibrant
     var background = Background.dark
@@ -39,47 +40,73 @@ private struct GifFrame {
     var delay: Double
 }
 
-/// Renders a solution's disassembly with SceneKit and writes it as an animated GIF.
+/// Renders a solution's disassembly and writes it as an animated GIF, in the
+/// style of scripts/burr2gif.py (matplotlib voxels): flat colours shaded by a
+/// fixed light, a thin dark line around every cube face, and no faces where
+/// cubes touch.
+///
+/// Coordinates: burr2gif draws with matplotlib axes X = x, Y = z, up = -y of the
+/// puzzle. The camera and the light below use the same mapping, so angles match.
 final class GifRenderer {
     private let model: SolutionScene
     private let options: GifOptions
+    private let cubeGrid: Bool
+    private var voxels: [[SIMD3<Float>]] = []
+    private var triangles: [[(a: SIMD3<Float>, b: SIMD3<Float>, c: SIMD3<Float>, normal: SIMD3<Float>)]] = []
 
     /// Must be created on the main thread (it reads the puzzle).
     init(document: PuzzleDocument, problem: Int, solution: Int, options: GifOptions) {
         self.options = options
         model = SolutionScene(document: document, problem: problem, solution: solution, colors: options.colors)
+        cubeGrid = document.gridType == .bricks
+        for i in model.nodes.indices {
+            if cubeGrid {
+                voxels.append(model.nodes[i] == nil ? [] : model.pieceVoxels(i))
+            } else {
+                triangles.append(model.nodes[i] == nil ? [] : model.pieceTriangles(i))
+            }
+        }
     }
 
     var steps: Int { model.steps }
 
-    // MARK: frame plan
+    // MARK: matplotlib look
 
-    /// Camera azimuths (degrees) that show each kind of move best, as in burr2gif:
-    /// sideways moves are seen from the front, front/back moves from the side.
-    private enum MoveAxis { case x, z, mixed, vertical }
+    /// matplotlib's default 3D light (LightSource azdeg=225, altdeg=19.47),
+    /// converted from axes coordinates (X, Y, Z) to puzzle coordinates (x, -Z, Y).
+    private static let light = SIMD3<Float>(-2.0 / 3, -1.0 / 3, -2.0 / 3)
 
-    private func azimuth(for axis: MoveAxis) -> Double? {
-        switch axis {
-        case .x: return 75
-        case .z: return 15
-        case .mixed: return 45
-        case .vertical: return nil   // any angle shows up/down moves; keep the current one
-        }
+    /// matplotlib's face shading: brightness 0.3 ... 1 depending on the light.
+    private static func shade(_ normal: SIMD3<Float>) -> Float {
+        let n = simd_normalize(normal)
+        let d = simd_dot(n, light)
+        return 0.3 + 0.7 * (d + 1) / 2
     }
 
-    private func moveAxis(from a: Int, to b: Int) -> MoveAxis? {
+    /// Camera direction for matplotlib's view_init(elev, azim), in puzzle coordinates.
+    private func cameraDirection(azimuth: Double) -> SIMD3<Float> {
+        let az = azimuth * .pi / 180, el = options.elevation * .pi / 180
+        return SIMD3(Float(cos(el) * cos(az)), Float(-sin(el)), Float(cos(el) * sin(az)))
+    }
+
+    // MARK: frame plan (same rules as burr2gif)
+
+    private func axisAzimuth(from a: Int, to b: Int) -> Double? {
         let s0 = model.pieceStates(step: Double(a))
         let s1 = model.pieceStates(step: Double(b))
         var d = SIMD3<Float>(repeating: 0)
+        var moved = false
         for (p0, p1) in zip(s0, s1) {
-            guard let p0, let p1, p0.alpha > 0.01 || p1.alpha > 0.01 else { continue }
-            d += simd_abs(p1.position - p0.position)
+            guard let p0, let p1, p0.alpha > 0.5, p1.alpha > 0.5 else { continue }
+            let delta = p1.position - p0.position
+            if simd_length(delta) > 0.001 { moved = true }
+            d += delta
         }
-        if d.x + d.y + d.z < 0.001 { return nil }
-        if d.x < 0.001 && d.z < 0.001 { return .vertical }
-        if d.x > d.z * 1.5 { return .x }
-        if d.z > d.x * 1.5 { return .z }
-        return .mixed
+        guard moved else { return nil }
+        // burr2gif: sideways (x) moves from -75°, front/back (z) moves from -15°, otherwise -45°
+        if abs(d.x) > abs(d.z) * 1.5 { return -75 }
+        if abs(d.z) > abs(d.x) * 1.5 { return -15 }
+        return -45
     }
 
     private func planFrames() -> [GifFrame] {
@@ -87,18 +114,12 @@ final class GifRenderer {
         let frameDelay = options.moveTime / Double(k)
         let turnFrames = 4
         var frames: [GifFrame] = []
-        var az = 45.0
+        var az = -45.0
 
-        // pick the starting angle from the first move, so the GIF does not open with a turn
-        if options.camera == .follow, steps > 0,
-           let axis = moveAxis(from: 0, to: 1), let a = azimuth(for: axis) {
-            az = a
-        }
         frames.append(GifFrame(step: 0, azimuth: az, delay: max(frameDelay, options.startPause)))
 
         for move in 0..<steps {
-            if options.camera == .follow, let axis = moveAxis(from: move, to: move + 1),
-               let target = azimuth(for: axis), abs(target - az) > 1 {
+            if options.camera == .follow, let target = axisAzimuth(from: move, to: move + 1), abs(target - az) > 0.5 {
                 // turn the camera first while nothing moves
                 for t in 1...turnFrames {
                     let a = az + (target - az) * Double(t) / Double(turnFrames)
@@ -119,7 +140,7 @@ final class GifRenderer {
 
         if options.camera == .orbit {
             for i in frames.indices {
-                frames[i].azimuth = 45 + 360 * Double(i) / Double(frames.count)
+                frames[i].azimuth = -45 + 360 * Double(i) / Double(frames.count)
             }
         }
         frames[frames.count - 1].delay = max(frames[frames.count - 1].delay, options.endPause)
@@ -130,26 +151,154 @@ final class GifRenderer {
         model.pieceStates(step: step).contains { ($0?.alpha ?? 0) > 0.99 }
     }
 
-    // MARK: rendering
+    // MARK: geometry
 
-    /// Bounding sphere around everything visible during the animation,
-    /// so the camera can show all of it from any angle.
-    private func animationBounds(_ frames: [GifFrame]) -> (center: SIMD3<Float>, radius: Float) {
-        var lo = SIMD3<Float>(repeating: .infinity), hi = SIMD3<Float>(repeating: -.infinity)
-        // only whole moves: between them, removed pieces fly far out while fading,
-        // and following them would make the puzzle tiny
-        let sampled = Set(frames.map { $0.step.rounded(.down) })
-        for step in sampled {
-            model.update(step: step)
-            for node in model.nodes {
-                guard let node, !node.isHidden, node.opacity > 0.99 else { continue }
-                let (mn, mx) = node.boundingBox
-                lo = simd_min(lo, node.simdPosition + SIMD3(Float(mn.x), Float(mn.y), Float(mn.z)))
-                hi = simd_max(hi, node.simdPosition + SIMD3(Float(mx.x), Float(mx.y), Float(mx.z)))
+    private struct Scene {
+        var faces: [SIMD3<Float>] = []       // 4 corners per quad, or 3 per triangle
+        var faceColors: [SIMD4<Float>] = []
+        var lines: [SIMD3<Float>] = []       // 2 points per segment
+        var triangleFaces: [SIMD3<Float>] = []
+        var triangleColors: [SIMD4<Float>] = []
+    }
+
+    /// Unit cube faces: outward normal and the 4 corners (offsets from the low corner).
+    private static let cubeFaces: [(normal: SIMD3<Float>, corners: [SIMD3<Float>])] = [
+        (SIMD3(-1, 0, 0), [SIMD3(0, 0, 0), SIMD3(0, 0, 1), SIMD3(0, 1, 1), SIMD3(0, 1, 0)]),
+        (SIMD3(1, 0, 0), [SIMD3(1, 0, 0), SIMD3(1, 1, 0), SIMD3(1, 1, 1), SIMD3(1, 0, 1)]),
+        (SIMD3(0, -1, 0), [SIMD3(0, 0, 0), SIMD3(1, 0, 0), SIMD3(1, 0, 1), SIMD3(0, 0, 1)]),
+        (SIMD3(0, 1, 0), [SIMD3(0, 1, 0), SIMD3(0, 1, 1), SIMD3(1, 1, 1), SIMD3(1, 1, 0)]),
+        (SIMD3(0, 0, -1), [SIMD3(0, 0, 0), SIMD3(0, 1, 0), SIMD3(1, 1, 0), SIMD3(1, 0, 0)]),
+        (SIMD3(0, 0, 1), [SIMD3(0, 0, 1), SIMD3(1, 0, 1), SIMD3(1, 1, 1), SIMD3(0, 1, 1)]),
+    ]
+
+    private static func key(_ p: SIMD3<Float>) -> SIMD3<Int32> {
+        SIMD3(Int32((p.x * 64).rounded()), Int32((p.y * 64).rounded()), Int32((p.z * 64).rounded()))
+    }
+
+    private func buildScene(step: Double) -> Scene {
+        let states = model.pieceStates(step: step)
+        var scene = Scene()
+
+        if cubeGrid {
+            // all visible cubes in world coordinates; faces between touching cubes are hidden
+            var occupied = Set<SIMD3<Int32>>()
+            var cubes: [(corner: SIMD3<Float>, color: (r: Float, g: Float, b: Float))] = []
+            for (i, state) in states.enumerated() {
+                guard let state, state.alpha > 0.5, let color = model.pieceColors[i] else { continue }
+                for v in voxels[i] {
+                    let corner = state.position + v
+                    occupied.insert(Self.key(corner))
+                    cubes.append((corner, color))
+                }
+            }
+            let edgeLift: Float = 0.004   // keeps lines just in front of their face
+            for cube in cubes {
+                for face in Self.cubeFaces where !occupied.contains(Self.key(cube.corner + face.normal)) {
+                    let b = Self.shade(face.normal)
+                    let color = SIMD4(cube.color.r * b, cube.color.g * b, cube.color.b * b, 1)
+                    let pts = face.corners.map { cube.corner + $0 }
+                    scene.faces.append(contentsOf: pts)
+                    scene.faceColors.append(contentsOf: Array(repeating: color, count: 4))
+                    let lifted = pts.map { $0 + face.normal * edgeLift }
+                    for e in 0..<4 {
+                        scene.lines.append(lifted[e])
+                        scene.lines.append(lifted[(e + 1) % 4])
+                    }
+                }
+            }
+        } else {
+            for (i, state) in states.enumerated() {
+                guard let state, state.alpha > 0.5, let color = model.pieceColors[i] else { continue }
+                for t in triangles[i] {
+                    let b = Self.shade(t.normal)
+                    let c = SIMD4(color.r * b, color.g * b, color.b * b, 1)
+                    scene.triangleFaces.append(contentsOf: [t.a + state.position, t.b + state.position, t.c + state.position])
+                    scene.triangleColors.append(contentsOf: [c, c, c])
+                }
             }
         }
-        if lo.x > hi.x { return (.zero, 1) }
-        return ((lo + hi) / 2, max(simd_length(hi - lo) / 2, 0.5))
+        return scene
+    }
+
+    /// SceneKit treats vertex colours as linear; the palette is sRGB.
+    private static func linear(_ c: SIMD4<Float>) -> SIMD4<Float> {
+        func f(_ v: Float) -> Float { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+        return SIMD4(f(c.x), f(c.y), f(c.z), c.w)
+    }
+
+    private static func geometry(points: [SIMD3<Float>], colors: [SIMD4<Float>]?, indices: [Int32],
+                                 primitive: SCNGeometryPrimitiveType) -> SCNGeometry {
+        let vdata = points.withUnsafeBufferPointer { buf in
+            Data(buffer: UnsafeBufferPointer(start: UnsafeRawPointer(buf.baseAddress!).assumingMemoryBound(to: Float.self),
+                                             count: points.count * 4))
+        }
+        var sources = [SCNGeometrySource(data: vdata, semantic: .vertex, vectorCount: points.count,
+                                         usesFloatComponents: true, componentsPerVector: 3,
+                                         bytesPerComponent: 4, dataOffset: 0, dataStride: MemoryLayout<SIMD3<Float>>.stride)]
+        if let colors {
+            let lin = colors.map(linear)
+            let cdata = lin.withUnsafeBufferPointer { Data(buffer: $0) }
+            sources.append(SCNGeometrySource(data: cdata, semantic: .color, vectorCount: lin.count,
+                                             usesFloatComponents: true, componentsPerVector: 4,
+                                             bytesPerComponent: 4, dataOffset: 0, dataStride: MemoryLayout<SIMD4<Float>>.stride))
+        }
+        return SCNGeometry(sources: sources, elements: [SCNGeometryElement(indices: indices, primitiveType: primitive)])
+    }
+
+    private func node(for scene: Scene) -> SCNNode {
+        let root = SCNNode()
+
+        let flat = SCNMaterial()
+        flat.lightingModel = .constant
+        flat.diffuse.contents = NSColor.white
+        flat.isDoubleSided = true
+
+        if !scene.faces.isEmpty {
+            var idx: [Int32] = []
+            idx.reserveCapacity(scene.faces.count / 4 * 6)
+            for q in stride(from: 0, to: scene.faces.count, by: 4) {
+                let i = Int32(q)
+                idx.append(contentsOf: [i, i + 1, i + 2, i, i + 2, i + 3])
+            }
+            let g = Self.geometry(points: scene.faces, colors: scene.faceColors, indices: idx, primitive: .triangles)
+            g.materials = [flat]
+            root.addChildNode(SCNNode(geometry: g))
+        }
+        if !scene.triangleFaces.isEmpty {
+            let g = Self.geometry(points: scene.triangleFaces, colors: scene.triangleColors,
+                                  indices: (0..<Int32(scene.triangleFaces.count)).map { $0 }, primitive: .triangles)
+            g.materials = [flat]
+            root.addChildNode(SCNNode(geometry: g))
+        }
+        if !scene.lines.isEmpty {
+            // matplotlib edgecolors=(0.1, 0.1, 0.1, 0.8)
+            let g = Self.geometry(points: scene.lines, colors: nil,
+                                  indices: (0..<Int32(scene.lines.count)).map { $0 }, primitive: .line)
+            let m = SCNMaterial()
+            m.lightingModel = .constant
+            m.diffuse.contents = NSColor(srgbRed: 0.1, green: 0.1, blue: 0.1, alpha: 1)
+            m.transparency = 0.8
+            m.blendMode = .alpha
+            g.materials = [m]
+            root.addChildNode(SCNNode(geometry: g))
+        }
+        return root
+    }
+
+    // MARK: rendering
+
+    /// Box around everything shown at whole moves (burr2gif uses one fixed box too).
+    private func animationBounds(_ frames: [GifFrame]) -> (lo: SIMD3<Float>, hi: SIMD3<Float>) {
+        var lo = SIMD3<Float>(repeating: .infinity), hi = SIMD3<Float>(repeating: -.infinity)
+        for step in Set(frames.map { $0.step.rounded(.down) }) {
+            let s = buildScene(step: step)
+            for p in s.faces + s.triangleFaces {
+                lo = simd_min(lo, p)
+                hi = simd_max(hi, p)
+            }
+        }
+        if lo.x > hi.x { return (SIMD3(repeating: -1), SIMD3(repeating: 1)) }
+        return (lo, hi)
     }
 
     private func backgroundImage(size: Int) -> Any {
@@ -168,20 +317,41 @@ final class GifRenderer {
         }
     }
 
+    /// Camera distance so the whole box fits for every frame's view direction.
+    private func fitDistance(lo: SIMD3<Float>, hi: SIMD3<Float>, center: SIMD3<Float>, frames: [GifFrame], fov: Double) -> Float {
+        let t = Float(tan(fov / 2 * .pi / 180))
+        var corners: [SIMD3<Float>] = []
+        for x in [lo.x, hi.x] { for y in [lo.y, hi.y] { for z in [lo.z, hi.z] { corners.append(SIMD3(x, y, z) - center) } } }
+        var d: Float = 0
+        for az in Set(frames.map(\.azimuth)) {
+            let back = cameraDirection(azimuth: az)               // from centre towards camera
+            let right = simd_normalize(simd_cross(SIMD3<Float>(0, -1, 0), back))
+            let up = simd_cross(back, right)
+            for c in corners {
+                let depth = simd_dot(c, back)
+                d = max(d, depth + abs(simd_dot(c, right)) / t, depth + abs(simd_dot(c, up)) / t)
+            }
+        }
+        return d * 1.06
+    }
+
     /// Renders all frames and writes the GIF. `progress` gets values 0...1 and
     /// returns false to cancel. Runs on the calling (background) thread.
     func write(to url: URL, progress: (Double) -> Bool) throws {
         let frames = planFrames()
-        let (center, radius) = animationBounds(frames)
+        let (lo, hi) = animationBounds(frames)
+        let center = (lo + hi) / 2
+        let fov = 20.0
+        let distance = fitDistance(lo: lo, hi: hi, center: center, frames: frames, fov: fov)
 
-        let scene = model.scene
+        let scene = SCNScene()
         scene.background.contents = backgroundImage(size: options.size)
-        let camera = model.camera
-        let fov = 30.0
-        camera.camera?.fieldOfView = fov
-        let distance = radius / Float(sin(fov / 2 * .pi / 180)) * 1.08
-        camera.camera?.zNear = Double(max(0.01, distance - radius * 1.5))
-        camera.camera?.zFar = Double(distance + radius * 1.5)
+        let camera = SCNNode()
+        camera.camera = SCNCamera()
+        camera.camera!.fieldOfView = fov
+        camera.camera!.zNear = Double(max(0.01, distance - simd_length(hi - lo)))
+        camera.camera!.zFar = Double(distance + simd_length(hi - lo))
+        scene.rootNode.addChildNode(camera)
 
         let renderer = SCNRenderer(device: MTLCreateSystemDefaultDevice(), options: nil)
         renderer.scene = scene
@@ -194,16 +364,18 @@ final class GifRenderer {
             kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0],
         ] as CFDictionary)
 
-        let elevation = options.elevation * .pi / 180
         let size = CGSize(width: options.size, height: options.size)
+        var content: SCNNode?
         for (i, frame) in frames.enumerated() {
             if !progress(Double(i) / Double(frames.count)) { throw CancellationError() }
 
-            model.update(step: frame.step)
-            let az = frame.azimuth * .pi / 180
-            let dir = SIMD3<Float>(Float(cos(az) * cos(elevation)), Float(sin(elevation)), Float(sin(az) * cos(elevation)))
-            camera.simdPosition = center + dir * distance
-            camera.simdLook(at: center)
+            content?.removeFromParentNode()
+            let n = node(for: buildScene(step: frame.step))
+            scene.rootNode.addChildNode(n)
+            content = n
+
+            camera.simdPosition = center + cameraDirection(azimuth: frame.azimuth) * distance
+            camera.simdLook(at: center, up: SIMD3(0, -1, 0), localFront: SIMD3(0, 0, -1))
 
             let image = renderer.snapshot(atTime: 0, with: size, antialiasingMode: .multisampling4X)
             guard let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { continue }

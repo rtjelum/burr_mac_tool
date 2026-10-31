@@ -133,6 +133,10 @@ void bt_scene_piece_info(BTScene *s, int piece, int *shape, int *copy);
 int bt_scene_steps(BTScene *s);
 /* Moves the pieces to animation position `step` (0..steps, fractional allowed). */
 void bt_scene_set_step(BTScene *s, float step);
+/* Filled voxels of piece i as x,y,z triples (the voxel's low corner) in the
+ * same local coordinates as bt_scene_piece_mesh. Returns the voxel count and a
+ * malloc'ed array in *out (free with bt_free). Meant for cube grids. */
+int bt_scene_piece_voxels(BTScene *s, int piece, float **out);
 /* Current position of piece i, already centred on the assembled puzzle. */
 void bt_scene_piece_position(BTScene *s, int piece, float *x, float *y, float *z, float *alpha);
 

@@ -144,6 +144,8 @@ final class SolutionScene: ObservableObject {
     let steps: Int
     private let handle: OpaquePointer?
     private(set) var nodes: [SCNNode?] = []
+    /// Base colour of each piece (nil for unplaced pieces).
+    private(set) var pieceColors: [(r: Float, g: Float, b: Float)?] = []
 
     init(document: PuzzleDocument, problem: Int, solution: Int, colors: PieceColorStyle = .burrTools) {
         handle = bt_scene_create(document.puzzle, Int32(problem), Int32(solution))
@@ -153,6 +155,7 @@ final class SolutionScene: ObservableObject {
             for i in 0..<bt_scene_piece_count(handle) {
                 guard let mesh = bt_scene_piece_mesh(handle, i) else {
                     nodes.append(nil)
+                    pieceColors.append(nil)
                     continue
                 }
                 var shape: Int32 = 0, copy: Int32 = 0
@@ -160,6 +163,7 @@ final class SolutionScene: ObservableObject {
                 let color = colors == .vibrant
                     ? PieceColorStyle.vibrantPalette[nodes.count % PieceColorStyle.vibrantPalette.count]
                     : PieceColors.color(shape: Int(shape), copy: Int(copy))
+                pieceColors.append(color)
                 let node = SCNNode(geometry: MeshBuilder.geometry(mesh, color: color))
                 bt_mesh_free(mesh)
                 root.addChildNode(node)
@@ -178,6 +182,28 @@ final class SolutionScene: ObservableObject {
 
     func update(step: Double) {
         Self.place(handle, nodes, step: step)
+    }
+
+    /// Filled voxels of piece i (low corners, in the piece's local coordinates).
+    func pieceVoxels(_ i: Int) -> [SIMD3<Float>] {
+        guard let handle else { return [] }
+        var ptr: UnsafeMutablePointer<Float>?
+        let n = Int(bt_scene_piece_voxels(handle, Int32(i), &ptr))
+        guard let ptr else { return [] }
+        defer { bt_free(ptr) }
+        return (0..<n).map { SIMD3(ptr[$0 * 3], ptr[$0 * 3 + 1], ptr[$0 * 3 + 2]) }
+    }
+
+    /// Triangles of piece i's mesh: (corner positions, face normal), local coordinates.
+    func pieceTriangles(_ i: Int) -> [(a: SIMD3<Float>, b: SIMD3<Float>, c: SIMD3<Float>, normal: SIMD3<Float>)] {
+        guard let handle, let mesh = bt_scene_piece_mesh(handle, Int32(i)) else { return [] }
+        defer { bt_mesh_free(mesh) }
+        let m = mesh.pointee
+        func v(_ k: Int) -> SIMD3<Float> { SIMD3(m.positions[k * 3], m.positions[k * 3 + 1], m.positions[k * 3 + 2]) }
+        return (0..<Int(m.triangleCount)).map { t in
+            (v(t * 3), v(t * 3 + 1), v(t * 3 + 2),
+             SIMD3(m.normals[t * 9], m.normals[t * 9 + 1], m.normals[t * 9 + 2]))
+        }
     }
 
     /// Position and opacity of every piece at `step` (nil for unplaced pieces).

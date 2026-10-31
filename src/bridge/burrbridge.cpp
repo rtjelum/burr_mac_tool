@@ -594,6 +594,33 @@ BTMesh *bt_scene_piece_mesh(BTScene *s, int i) {
   }
 }
 
+int bt_scene_piece_voxels(BTScene *s, int i, float **out) {
+  *out = 0;
+  if (i < 0 || (size_t)i >= s->pieces.size() || !s->pieces[i].voxel) return 0;
+  try {
+    const voxel_c *v = s->pieces[i].voxel;
+    float hx = v->getHx(), hy = v->getHy(), hz = v->getHz();
+    v->recalcSpaceCoordinates(&hx, &hy, &hz);
+    std::vector<float> list;
+    for (unsigned int z = 0; z < v->getZ(); z++)
+      for (unsigned int y = 0; y < v->getY(); y++)
+        for (unsigned int x = 0; x < v->getX(); x++)
+          if (!v->isEmpty(x, y, z)) {
+            float px = x, py = y, pz = z;
+            v->recalcSpaceCoordinates(&px, &py, &pz);
+            list.push_back(px - hx);
+            list.push_back(py - hy);
+            list.push_back(pz - hz);
+          }
+    if (list.empty()) return 0;
+    *out = (float *)malloc(list.size() * sizeof(float));
+    memcpy(*out, list.data(), list.size() * sizeof(float));
+    return (int)(list.size() / 3);
+  } catch (...) {
+    return 0;
+  }
+}
+
 void bt_scene_piece_info(BTScene *s, int i, int *shape, int *copy) {
   *shape = *copy = 0;
   if (i < 0 || (size_t)i >= s->pieces.size()) return;
