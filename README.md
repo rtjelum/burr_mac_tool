@@ -2,6 +2,38 @@ This repository contains the BurrTools code with some modernisations
 to make it run on modern systems. You can download BurrTools from the 
 [Releases page](https://github.com/burr-tools/burr-tools/releases/).
 
+## Native macOS app (SwiftUI)
+
+`mac/` contains a new native Mac app written in SwiftUI. It replaces the old
+FLTK/OpenGL interface but uses the same C++ solver (`src/lib`), so solving
+results are the same. It opens and saves the usual `.xmpuzzle` files.
+
+Build it with only the Xcode Command Line Tools (`xcode-select --install`):
+
+```sh
+mac/build-app.sh          # creates build/BurrTools.app
+open build/BurrTools.app
+```
+
+What it does:
+
+* Opens and saves `.xmpuzzle` files, with undo/redo for every change.
+* Shows shapes and solutions in 3D for every grid type (cubes, prisms,
+  spheres, rhombic, tetra-octa).
+* Edits cube-grid shapes layer by layer (click or drag to add or remove cubes;
+  hold Option for variable cubes).
+* Sets up problems (result shape, how many copies of each piece) and solves
+  them in the background, with progress, stop and continue.
+* Plays the disassembly of each solution as an animation.
+
+Not yet in the new app (use the old app for these): editing shapes on non-cube
+grids, piece groups, colour constraints, placement and movement browsers,
+STL/image export, and the shape-generating tools.
+
+How it fits together: `Package.swift` builds the C++ library as the `BurrCore`
+target, with a small C interface in `src/bridge/`. The SwiftUI code is in
+`mac/BurrToolsApp/`.
+
 This fork ([burr_mac_tool](https://github.com/rtjelum/burr_mac_tool)) adds:
 
 * **Fixed text disassembly output** (`burrTxt -p`): no longer crashes when

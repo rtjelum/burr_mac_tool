@@ -47,3 +47,7 @@ src/help/
 .deps/
 .dirstamp
 *.o
+
+# Swift package build output
+.build/
+.swiftpm/
