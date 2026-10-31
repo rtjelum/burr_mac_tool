@@ -2,6 +2,23 @@ This repository contains the BurrTools code with some modernisations
 to make it run on modern systems. You can download BurrTools from the 
 [Releases page](https://github.com/burr-tools/burr-tools/releases/).
 
+This fork ([burr_mac_tool](https://github.com/rtjelum/burr_mac_tool)) adds:
+
+* **Fixed text disassembly output** (`burrTxt -p`): no longer crashes when
+  some pieces are left out of an assembly, and removed/remaining piece groups
+  now use the correct piece shapes. Each frame is padded by the full puzzle
+  size, so pieces moving out of the puzzle stay visible.
+* **`scripts/burr2gif.py`**: turns `burrTxt -p` output into an animated 3D GIF.
+
+  ```sh
+  pip install -r scripts/requirements-burr2gif.txt
+  burrTxt -d -p puzzle.xmpuzzle > solution.txt
+  python3 scripts/burr2gif.py solution.txt solution.gif
+  # options: --frame N (render one frame), --rotate X Y Z DEG (initial rotation)
+  ```
+
+  Sample input and output are in `scripts/burr2gif-samples/`.
+
 BurrTools was written by Andreas Röver, small patches provided by
 several authors. Original README below.
 

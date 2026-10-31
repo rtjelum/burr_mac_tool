@@ -1,0 +1,78 @@
+ The puzzle:
+
+shape 0:
+ +--------+ +--------+ +--------+ +--------+ +--------+ +--------+ +--------+ +--------+ bx 0-7 by 0-7 bz 0-7 h: 0 0 0 
+ !aaaaaaaa! !aaaaaaaa! !aaaaaaaa! !aaaaaaaa! !aaaaaaaa! !aaaaaaaa! !aaaaaaaa! !aaaaaaaa!
+ !aaaaaaaa! !abbbbbba! !abbbbbba! !abbbbbba! !abbbbbba! !abbbbbba! !abbbbbba! !aaaaaaaa!
+ !aaaaaaaa! !abbbbbba! !abbbbbba! !abbbbbba! !abbbbbba! !abbbbbba! !abbbbbba! !aaaaaaaa!
+ !aaaaaaaa! !abbbbbba! !abbbbbba! !abbbbbba! !abbbbbba! !abbbbbba! !abbbbbba! !aaaaaaaa!
+ !aaaaaaaa! !abbbbbba! !abbbbbba! !abbbbbba! !abbbbbba! !abbbbbba! !abbbbbba! !aaaaaaaa!
+ !aaaaaaaa! !abbbbbba! !abbbbbba! !abbbbbba! !abbbbbba! !abbbbbba! !abbbbbba! !aaaaaaaa!
+ !aaaaaaaa! !abbbbbba! !abbbbbba! !abbbbbba! !abbbbbba! !abbbbbba! !abbbbbba! !aaaaaaaa!
+ !aaaaaaaa! !aaaaaaaa! !aaaaaaaa! !aaaaaaaa! !aaaaaaaa! !aaaaaaaa! !aaaaaaaa! !aaaaaaaa!
+ +--------+ +--------+ +--------+ +--------+ +--------+ +--------+ +--------+ +--------+
+shape 1:
+ +--------+ +--------+ +--------+ +--------+ +--------+ +--------+ +--------+ +--------+ bx 0-7 by 0-7 bz 0-7 h: 0 0 0 
+ !aaaaaaaa! !aaaaaaaa! !aa    aa! !aa    aa! !aa    aa! !aa    aa! !aaaaaaaa! !aaaaaaaa!
+ !aaaaaaaa! !a      a! !a      a! !a      a! !a      a! !a      a! !a      a! !aaaaaaaa!
+ !aa    aa! !a      a! !        ! !        ! !        ! !        ! !a      a! !aa    aa!
+ !aa    aa! !a      a! !        ! !        ! !        ! !        ! !a      a! !aa    aa!
+ !aa    aa! !a      a! !        ! !        ! !        ! !        ! !a      a! !aa    aa!
+ !aa    aa! !a      a! !        ! !        ! !        ! !        ! !a      a! !aa    aa!
+ !aaaaaaaa! !a      a! !a      a! !a      a! !a      a! !a      a! !a      a! !aaaaaaaa!
+ !aaaaaaaa! !aaaaaaaa! !aa    aa! !aa    aa! !aa    aa! !aa    aa! !aaaaaaaa! !aaaaaaaa!
+ +--------+ +--------+ +--------+ +--------+ +--------+ +--------+ +--------+ +--------+
+shape 2:
+ +--------+ +--------+ +--------+ +--------+ bx 0-7 by 0-3 bz 0-3 h: 0 0 0 
+ !a aaaaaa! !a      a! !       a! !       a!
+ !aaa    a! !a      a! !       a! !      aa!
+ !a       ! !aa      ! !        ! !        !
+ !aaa     ! !a       ! !        ! !        !
+ +--------+ +--------+ +--------+ +--------+
+shape 3:
+ +--------+ +--------+ +--------+ +--------+ bx 0-7 by 0-3 bz 0-3 h: 0 0 0 
+ !a       ! !a       ! !a     aa! !a     aa!
+ !aa      ! !a       ! !a  aaaaa! !aaaa   a!
+ !        ! !        ! !       a! !       a!
+ !        ! !        ! !       a! !       a!
+ +--------+ +--------+ +--------+ +--------+
+shape 4:
+ +--------+ +--------+ +--------+ +--------+ bx 0-7 by 0-3 bz 0-3 h: 0 0 0 
+ !a       ! !a       ! !a     aa! !a      a!
+ !a       ! !a       ! !a aaaaaa! !aaa    a!
+ !        ! !        ! !     a a! !       a!
+ !        ! !        ! !       a! !       a!
+ +--------+ +--------+ +--------+ +--------+
+shape 5:
+ +--------+ +--------+ +--------+ +--------+ bx 0-7 by 0-3 bz 0-3 h: 0 0 0 
+ !a aaaaaa! !a      a! !       a! !       a!
+ !aaa   aa! !a      a! !       a! !       a!
+ !a       ! !a       ! !        ! !        !
+ !a       ! !a       ! !        ! !        !
+ +--------+ +--------+ +--------+ +--------+
+shape 6:
+ +--------+ +--------+ +--------+ +--------+ bx 0-7 by 0-3 bz 0-3 h: 0 0 0 
+ !a aaaaaa! !a      a! !       a! !       a!
+ !aaa    a! !a      a! !       a! !       a!
+ !a       ! !a       ! !        ! !        !
+ !a       ! !a       ! !        ! !        !
+ +--------+ +--------+ +--------+ +--------+
+shape 7:
+ +--------+ +--------+ +--------+ +--------+ bx 0-7 by 0-3 bz 0-3 h: 0 0 0 
+ !a      a! !aaa    a! !       a! !       a!
+ !a      a! !a aaaaaa! !       a! !       a!
+ !a       ! !a       ! !        ! !        !
+ !a       ! !a       ! !        ! !        !
+ +--------+ +--------+ +--------+ +--------+
+=======================================================
+problem 0 (Problem):
+ result shape: 0
+ piece shape: 1
+ piece shape: 2
+ piece shape: 3
+ piece shape: 4
+ piece shape: 5
+ piece shape: 6
+ piece shape: 7
+-------------------------------------------------------
+12 assemblies and 0 solutions found with 89 iterations 

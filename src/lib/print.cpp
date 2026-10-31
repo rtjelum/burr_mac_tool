@@ -96,18 +96,18 @@ static void print_rec(const separation_c * s, voxel_c ** pieces, int sx, int sy,
 
     const state_c * st = s->getState(i);
 
-    for (int z = -sz/2; z < sz+sz/2; z++) {
+    for (int z = -sz; z < sz+sz; z++) {
       printf(" +");
-      for (int x = -sx/2; x < sx+sx/2; x++)
+      for (int x = -sx; x < sx+sx; x++)
         printf("-");
       printf("+");
     }
     printf("\n");
 
-    for (int y = -sy/2; y < sy+sy/2; y++) {
-      for (int z = -sz/2; z < sz+sz/2; z++) {
+    for (int y = -sy; y < sy+sy; y++) {
+      for (int z = -sz; z < sz+sz; z++) {
         printf(" !");
-        for (int x = -sx/2; x < sx+sx/2; x++) {
+        for (int x = -sx; x < sx+sx; x++) {
           char c = ' ';
 
           for (unsigned int pc = 0; pc < s->getPieceNumber(); pc++)
@@ -125,9 +125,9 @@ static void print_rec(const separation_c * s, voxel_c ** pieces, int sx, int sy,
       printf("\n");
     }
 
-    { for (int z = -sz/2; z < sz+sz/2; z++) {
+    { for (int z = -sz; z < sz+sz; z++) {
         printf(" +");
-        for (int x = -sx/2; x < sx+sx/2; x++)
+        for (int x = -sx; x < sx+sx; x++)
           printf("-");
         printf("+");
       }
@@ -139,28 +139,48 @@ static void print_rec(const separation_c * s, voxel_c ** pieces, int sx, int sy,
 
   if (s->getRemoved()) {
 
-    unsigned int * pieceNum2 = new unsigned int [s->getPieceNumber()];
+    unsigned int removedCount = 0;
+    for (unsigned int i = 0; i < s->getPieceNumber(); i++)
+      if (s->getState(s->getMoves())->pieceRemoved(i))
+        removedCount++;
+
+    voxel_c ** pieces2 = new voxel_c*[removedCount];
+    unsigned int * pieceNum2 = new unsigned int[removedCount];
 
     int pos = 0;
     for (unsigned int i = 0; i < s->getPieceNumber(); i++)
-      if (s->getState(s->getMoves())->pieceRemoved(i))
-        pieceNum2[pos++] = pieceNum[i];
+      if (s->getState(s->getMoves())->pieceRemoved(i)) {
+        pieces2[pos] = pieces[i];
+        pieceNum2[pos] = pieceNum[i];
+        pos++;
+      }
 
-    print_rec(s->getRemoved(), pieces, sx, sy, sz, pieceNum2);
+    print_rec(s->getRemoved(), pieces2, sx, sy, sz, pieceNum2);
 
+    delete [] pieces2;
     delete [] pieceNum2;
   }
   if (s->getLeft()) {
 
-    unsigned int * pieceNum2 = new unsigned int [s->getPieceNumber()];
+    unsigned int leftCount = 0;
+    for (unsigned int i = 0; i < s->getPieceNumber(); i++)
+      if (!s->getState(s->getMoves())->pieceRemoved(i))
+        leftCount++;
+
+    voxel_c ** pieces2 = new voxel_c*[leftCount];
+    unsigned int * pieceNum2 = new unsigned int[leftCount];
 
     int pos = 0;
     for (unsigned int i = 0; i < s->getPieceNumber(); i++)
-      if (!(s->getState(s->getMoves())->pieceRemoved(i)))
-        pieceNum2[pos++] = pieceNum[i];
+      if (!s->getState(s->getMoves())->pieceRemoved(i)) {
+        pieces2[pos] = pieces[i];
+        pieceNum2[pos] = pieceNum[i];
+        pos++;
+      }
 
-    print_rec(s->getLeft(), pieces, sx, sy, sz, pieceNum2);
+    print_rec(s->getLeft(), pieces2, sx, sy, sz, pieceNum2);
 
+    delete [] pieces2;
     delete [] pieceNum2;
   }
 }
@@ -171,26 +191,34 @@ void print(const separation_c * s, const assembly_c * a, const problem_c * p) {
 
   const voxel_c * res = getResultShape(*p);
 
-  voxel_c ** pieces = new voxel_c*[a->placementCount()];
+  // Only include placed pieces — unplaced ones have no transformation and would crash.
+  // The separation indexes pieces in the same order as placed slots in the assembly.
+  voxel_c ** pieces = new voxel_c*[s->getPieceNumber()];
 
   unsigned int pc = 0;
+  unsigned int sep_pc = 0;
 
   for (unsigned int i = 0; i < p->getNumberOfParts(); i++)
     for (unsigned int j = 0; j < p->getPartMaximum(i); j++) {
 
-      pieces[pc] = p->getPuzzle().getGridType()->getVoxel(p->getPartShape(i));
-      bt_assert2(pieces[pc]->transform(a->getTransformation(pc)));
+      if (a->isPlaced(pc)) {
+        pieces[sep_pc] = p->getPuzzle().getGridType()->getVoxel(p->getPartShape(i));
+        bt_assert2(pieces[sep_pc]->transform(a->getTransformation(pc)));
+        sep_pc++;
+      }
       pc++;
     }
 
-  unsigned int * pieceNum = new unsigned int [a->placementCount()];
-  for (unsigned int i = 0; i < a->placementCount(); i++)
+  bt_assert(sep_pc == s->getPieceNumber());
+
+  unsigned int * pieceNum = new unsigned int [s->getPieceNumber()];
+  for (unsigned int i = 0; i < s->getPieceNumber(); i++)
     pieceNum[i] = i;
 
   print_rec(s, pieces, res->getX(), res->getY(), res->getZ(), pieceNum);
 
-  for (unsigned int pc = 0; pc < a->placementCount(); pc++)
-    delete pieces[pc];
+  for (unsigned int i = 0; i < s->getPieceNumber(); i++)
+    delete pieces[i];
 
   delete [] pieceNum;
   delete [] pieces;
