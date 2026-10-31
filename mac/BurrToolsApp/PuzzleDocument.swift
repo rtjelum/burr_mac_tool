@@ -256,13 +256,22 @@ final class PuzzleDocument: ReferenceFileDocument {
 
     // MARK: solving
 
-    func startSolving(problem: Int, options: SolveOptions, undo: UndoManager?) {
+    /// Starts the solver. With `fromStart`, existing solutions are removed first
+    /// (the solver can only add to an unsolved or paused problem); otherwise a
+    /// paused run continues where it stopped.
+    func startSolving(problem: Int, options: SolveOptions, fromStart: Bool, undo: UndoManager?) {
         guard !isSolving else { return }
         let before = try? serialize()
+        let cleared = fromStart && problemSolveState(problem) != BT_SOLVE_UNSOLVED
+        if cleared { bt_problem_clear_solutions(puzzle, Int32(problem)) }
         var err: UnsafeMutablePointer<CChar>?
         guard let handle = bt_solver_start(puzzle, Int32(problem), options.flags, Int32(options.sort),
                                            Int32(clamping: options.limit), &err) else {
             lastError = takeString(err) ?? "Could not start the solver."
+            if cleared, let before {
+                registerUndo("Clear Solutions", before: before, undo: undo)
+                revision += 1
+            }
             return
         }
         lastError = nil

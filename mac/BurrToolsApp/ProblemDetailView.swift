@@ -172,12 +172,18 @@ struct ProblemDetailView: View {
                 if isSolvingThis {
                     Button("Stop") { document.stopSolving() }
                 } else {
-                    Button(state == BT_SOLVE_SOLVING ? "Continue Solving" : "Solve") {
-                        selectedSolution.value = nil
-                        document.startSolving(problem: problem, options: options.value, undo: undo)
+                    if state == BT_SOLVE_SOLVING {
+                        // a paused run: carry on, or throw it away and start again
+                        Button("Continue") { solve(fromStart: false) }
+                            .keyboardShortcut("r", modifiers: .command)
+                            .disabled(document.isSolving || !document.canSolve)
+                        Button("Solve from Start") { solve(fromStart: true) }
+                            .disabled(document.isSolving || !document.canSolve)
+                    } else {
+                        Button("Solve") { solve(fromStart: true) }
+                            .keyboardShortcut("r", modifiers: .command)
+                            .disabled(document.isSolving || !document.canSolve)
                     }
-                    .keyboardShortcut("r", modifiers: .command)
-                    .disabled(document.isSolving || !document.canSolve)
                 }
                 Spacer()
                 Button("Clear Solutions", role: .destructive) {
@@ -232,6 +238,11 @@ struct ProblemDetailView: View {
         guard let current = document.problems[safe: problem], name.value != current.name else { return }
         let n = name.value
         document.edit("Rename Problem", undo: undo) { p in bt_problem_set_name(p, Int32(problem), n) }
+    }
+
+    private func solve(fromStart: Bool) {
+        selectedSolution.value = nil
+        document.startSolving(problem: problem, options: options.value, fromStart: fromStart, undo: undo)
     }
 
     private func plural(_ n: Int, _ one: String, _ many: String) -> String {
