@@ -68,7 +68,7 @@ struct SolutionInfo: Identifiable, Hashable {
     }
 }
 
-/// Piece colours, ported from src/gui/piececolor.cpp so pieces look like they did in the old app.
+/// Piece colours, the same as in the original BurrTools app.
 enum PieceColors {
     private static let r: [Float] = [0, 0, 1, 0, 1, 1, 0, 0, 0.6, 0, 0.6, 0.6, 0, 0.6, 0, 0.6, 1, 1]
     private static let g: [Float] = [0, 1, 0, 1, 1, 0, 0, 0.6, 0, 0.6, 0.6, 0, 1, 1, 0.6, 0, 0.6, 0]

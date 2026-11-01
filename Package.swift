@@ -20,7 +20,6 @@ let package = Package(
             name: "BurrCore",
             path: "src",
             exclude: [
-                "lib/bitfield_test.cpp", "lib/main_test.cpp", "lib/voxel_0_test.cpp",
                 "lib/tabs_0", "lib/tabs_1", "lib/tabs_2", "lib/tabs_3", "lib/tabs_4",
             ],
             sources: [

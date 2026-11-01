@@ -134,7 +134,7 @@ enum PieceColorStyle: String, CaseIterable, Identifiable {
         (0.55, 0.78, 0.20), (0.95, 0.65, 0.30),
     ]
 
-    /// The bright palette from scripts/burr2gif.py, one colour per piece.
+    /// The bright palette from the old burr2gif.py script, one colour per piece.
     static let vibrantPalette: [(r: Float, g: Float, b: Float)] = [
         (1.00, 0.20, 0.40), (0.10, 0.90, 0.50), (0.00, 0.60, 1.00), (1.00, 0.80, 0.00), (0.70, 0.30, 1.00),
         (0.00, 0.90, 0.90), (1.00, 0.42, 0.00), (0.52, 1.00, 0.00), (0.18, 0.22, 1.00), (0.95, 0.05, 0.05),

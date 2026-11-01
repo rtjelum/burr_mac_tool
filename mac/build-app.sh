@@ -19,7 +19,7 @@ sed "s/@VERSION@/$VERSION/g" mac/Info.plist > "$BUNDLE/Contents/Info.plist"
 # App icon from the original Windows icon (largest size it contains)
 ICONSET="$(mktemp -d)/BurrTools.iconset"
 mkdir -p "$ICONSET"
-if sips -s format png burricons.ico --out "$ICONSET/base.png" >/dev/null 2>&1; then
+if sips -s format png mac/AppIcon.ico --out "$ICONSET/base.png" >/dev/null 2>&1; then
     for s in 16 32 64 128 256 512; do
         sips -z $s $s "$ICONSET/base.png" --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
     done

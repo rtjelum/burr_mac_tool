@@ -63,7 +63,7 @@ private struct GifFrame {
 }
 
 /// Renders a solution's disassembly and writes it as an animated GIF, in the
-/// style of scripts/burr2gif.py (matplotlib voxels): flat colours shaded by a
+/// style of the old burr2gif.py script (matplotlib voxels): flat colours shaded by a
 /// fixed light, a thin dark line around every cube face, and no faces where
 /// cubes touch.
 ///

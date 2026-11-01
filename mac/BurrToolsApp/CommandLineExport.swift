@@ -1,14 +1,14 @@
 import BurrCore
 import Foundation
 
-/// Command line GIF export, a built-in replacement for scripts/burr2gif.py:
+/// Command line GIF export, in the same style as the old burr2gif.py script:
 ///
 ///   BurrTools.app/Contents/MacOS/BurrTools --export-gif puzzle.xmpuzzle out.gif
 ///       [--problem N] [--solution N] [--size PIXELS] [--frames-per-move N]
 ///       [--move-time SECONDS] [--camera follow|fixed|orbit] [--colors vibrant|toy|burrtools]
 ///       [--background dark|light|white] [--style studio|classic] [--solve]
 ///
-/// The default look is "studio"; "classic" matches scripts/burr2gif.py.
+/// The default look is "studio"; "classic" matches the old burr2gif.py script.
 ///
 /// The output is an MP4 video if its name ends in .mp4, a single PNG image if it
 /// ends in .png (pick the frame with --frame N, counting from 0), otherwise a GIF.

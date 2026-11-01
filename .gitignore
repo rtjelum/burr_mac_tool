@@ -1,53 +1,16 @@
-*#
-*~
-admin/
-doxygen.cfg
-src/burrTxt
-src/burrTxt2
-src/gui/burrGui
-src/help/helpviewer
-src/unitTest
-build/
-GPATH
-GRTAGS
-GTAGS
-
-# Meson subprojects (keep only .wrap files in git)
-subprojects/*
-!subprojects/*.wrap
-
-# macOS build artifacts
-*.dmg
-*.app
-dmg_contents/
-
-# macOS
 .DS_Store
+*~
+*#
 
-# Local scratch: large generated outputs, backups
-local/
-*.bak
-.cache/
-.venv/
-
-# Autotools-generated files (project builds with meson)
-INSTALL
-Makefile
-Makefile.in
-aclocal.m4
-autom4te.cache/
-config.log
-config.status
-configure
-src/config.h
-src/config.h.in
-src/stamp-h1
-src/flu/
-src/help/
-.deps/
-.dirstamp
-*.o
-
-# Swift package build output
+# Swift package and app build output
 .build/
 .swiftpm/
+build/
+
+# Local scratch
+local/
+.cache/
+.venv/
+*.bak
+*.o
+.deps/
