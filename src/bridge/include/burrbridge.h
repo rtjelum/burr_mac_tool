@@ -200,25 +200,35 @@ typedef struct {
   int bestSolutions;
   int polishing;       /* target reached; now making the pieces more compact */
   int bestVersion;     /* changes whenever the best design changes */
+  int searchingMore;   /* target reached; still looking for more moves */
 } BTGeneratorStatus;
 
 /* Splits `shape` (all its filled and variable cubes, except `holes` variable
  * cubes that stay empty) into `pieces` new connected pieces of at least
  * `minSize` cubes, searching in the background for a design whose level
  * (metric 0) or total moves (metric 1) reaches `target`. With `unique`, only
- * designs with exactly one solution count.
+ * designs with exactly one solution count. Reaching the target does not end
+ * the search: it goes on looking for designs with more moves until it has
+ * found no better one for a while (at least 60 s, or half the time searched,
+ * at most 10 minutes), or it is stopped.
  * `fixed`: shapes used as starting pieces (e.g. a cage). They keep their shape
  * and are placed where they are drawn, or the nearest place they fit; the new
  * pieces fill the space that is left.
  * `startProblem` >= 0: start from the pieces of that problem's first saved
  * solution (it must use the same final shape) and reshape them step by step;
  * `pieces` and `holes` then come from that design.
- * `compact`: once a design reaches the target, keep reshaping it towards
- * block-like pieces (fewer thin arms and gaps) while it still reaches the
- * target. seed 0 = random. */
+ * `stickWidth` x `stickHeight` > 0: burr sticks. Every new piece is a
+ * straight bar with that cross-section, lying in the shape, with notches where
+ * it crosses other bars; variable cubes are filled or left empty as needed
+ * (`holes` is not used). With `startProblem`, each piece keeps to its bounding
+ * box. 0 x 0: pieces of any shape.
+ * `compact` (pieces of any shape only): once a design reaches the target, keep
+ * reshaping it towards block-like pieces (fewer thin arms and gaps) while it
+ * still reaches the target. seed 0 = random. */
 BTGenerator *bt_generator_start(BTPuzzle *p, int shape, int pieces, int target, int metric,
                                 int unique, int minSize, int holes, const int *fixed, int fixedCount,
-                                int startProblem, int compact, unsigned int seed, char **error);
+                                int startProblem, int compact, int stickWidth, int stickHeight,
+                                unsigned int seed, char **error);
 void bt_generator_status(BTGenerator *g, BTGeneratorStatus *status);
 char *bt_generator_error(BTGenerator *g);
 void bt_generator_stop(BTGenerator *g);

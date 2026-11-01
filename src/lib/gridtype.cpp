@@ -235,11 +235,9 @@ unsigned int gridType_c::getCapabilities(void) const
 assembler_c * gridType_c::findAssembler(const problem_c & p)
 {
   if (assembler_0_c::canHandle(p)) {
-    fprintf(stderr, "using assembler 0\n");
     return new assembler_0_c(p);
   }
   if (assembler_1_c::canHandle(p)) {
-    fprintf(stderr, "using assembler 1\n");
     return new assembler_1_c(p);
   }
 

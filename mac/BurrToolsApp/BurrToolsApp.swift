@@ -4,6 +4,34 @@ import SwiftUI
 
 /// Shows the Open dialog at launch instead of an empty "Untitled" puzzle.
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        Self.turnOffAutosave()
+    }
+
+    /// SwiftUI documents save every change straight into the file. Turn that
+    /// off so a puzzle is only written when the user saves, and closing or
+    /// quitting with unsaved changes asks first. SwiftUI's document class is
+    /// private (and made at runtime), so each document's class is changed as
+    /// the document is added.
+    private static func turnOffAutosave() {
+        guard let original = class_getInstanceMethod(NSDocumentController.self, #selector(NSDocumentController.addDocument(_:))),
+              let replacement = class_getInstanceMethod(NSDocumentController.self, #selector(NSDocumentController.bt_addDocument(_:)))
+        else { return }
+        method_exchangeImplementations(original, replacement)
+    }
+
+    private static var patched = Set<ObjectIdentifier>()
+
+    static func turnOffAutosave(for cls: AnyClass) {
+        guard patched.insert(ObjectIdentifier(cls)).inserted, let meta = object_getClass(cls) else { return }
+        let no: @convention(block) (AnyObject) -> Bool = { _ in false }
+        let imp = imp_implementationWithBlock(no)
+        for sel in [#selector(getter: NSDocument.autosavesInPlace), #selector(getter: NSDocument.autosavesDrafts),
+                    #selector(getter: NSDocument.preservesVersions)] {
+            class_replaceMethod(meta, sel, imp, "c@:")
+        }
+    }
+
     func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { false }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -27,6 +55,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if controller.documents.isEmpty {
             controller.openDocument(nil)
         }
+    }
+}
+
+extension NSDocumentController {
+    /// Swapped with addDocument(_:) at launch (see AppDelegate.turnOffAutosave).
+    @objc func bt_addDocument(_ document: NSDocument) {
+        AppDelegate.turnOffAutosave(for: Swift.type(of: document))
+        bt_addDocument(document)   // the original addDocument(_:)
     }
 }
 
@@ -84,7 +120,8 @@ enum SidebarItem: Hashable {
 struct ContentView: View {
     @ObservedObject var document: PuzzleDocument
     @Environment(\.undoManager) private var undo
-    @StateObject private var selection = ViewState<SidebarItem?>(.info)
+    /// Several shapes and problems can be selected (Command- or Shift-click) to delete them together.
+    @StateObject private var selection = ViewState<Set<SidebarItem>>([.info])
     @StateObject private var showStlExport = ViewState<Bool>(false)
     @StateObject private var showNewBox = ViewState<Bool>(false)
     @StateObject private var showGenerator = ViewState<Bool>(false)
@@ -108,7 +145,7 @@ struct ContentView: View {
                         }
                         .tag(SidebarItem.shape(shape.id))
                         .contextMenu {
-                            Button("Delete Shape", role: .destructive) { deleteShape(shape.id) }
+                            Button(deleteTitle(for: .shape(shape.id)), role: .destructive) { delete(clicked: .shape(shape.id)) }
                         }
                     }
                 }
@@ -118,11 +155,12 @@ struct ContentView: View {
                         Label(problem.displayName, systemImage: "puzzlepiece")
                             .tag(SidebarItem.problem(problem.id))
                             .contextMenu {
-                                Button("Delete Problem", role: .destructive) { deleteProblem(problem.id) }
+                                Button(deleteTitle(for: .problem(problem.id)), role: .destructive) { delete(clicked: .problem(problem.id)) }
                             }
                     }
                 }
             }
+            .onDeleteCommand { if !document.isSolving { deleteSelected() } }
             .navigationSplitViewColumnWidth(min: 200, ideal: 240)
             .safeAreaInset(edge: .bottom) {
                 HStack {
@@ -141,38 +179,38 @@ struct ContentView: View {
                     .help("Add a shape or problem")
 
                     Button {
-                        switch selection.value {
-                        case .shape(let i): deleteShape(i)
-                        case .problem(let i): deleteProblem(i)
-                        default: break
-                        }
+                        deleteSelected()
                     } label: {
                         Image(systemName: "minus")
                     }
                     .buttonStyle(.borderless)
                     .disabled(!isDeletable)
-                    .help("Delete the selected shape or problem")
+                    .help("Delete the selected shapes and problems (Command- or Shift-click to select several)")
                     Spacer()
                 }
                 .padding(8)
                 .disabled(document.isSolving)
             }
         } detail: {
-            switch selection.value {
+            switch single {
             case .shape(let i) where i < shapes.count:
                 ShapeDetailView(document: document, shape: i)
             case .problem(let i) where i < problems.count:
                 ProblemDetailView(document: document, problem: i, onExportStl: { showStlExport.value = true })
             default:
-                PuzzleInfoView(document: document)
+                if deletable.count > 1 {
+                    MultipleSelectionView(count: deletable.count, solving: document.isSolving) { deleteSelected() }
+                } else {
+                    PuzzleInfoView(document: document)
+                }
             }
         }
         .focusedSceneValue(\.exportStl, canExportStl ? { showStlExport.value = true } : nil)
         .sheet(isPresented: $showGenerator.value) {
-            GeneratorView(document: document) { selection.value = .problem($0) }
+            GeneratorView(document: document) { selection.value = [.problem($0)] }
         }
         .sheet(isPresented: $showNewBox.value) {
-            NewBoxView(document: document) { selection.value = .shape($0) }
+            NewBoxView(document: document) { selection.value = [.shape($0)] }
         }
         .sheet(isPresented: $showStlExport.value) {
             StlExportView(document: document, problem: stlProblem)
@@ -192,16 +230,39 @@ struct ContentView: View {
     /// The problem whose result shape sets the assembled size: the selected one,
     /// or else the first problem that has a result shape.
     private var stlProblem: Int? {
-        if case .problem(let i) = selection.value, i < document.problems.count { return i }
+        if case .problem(let i) = single, i < document.problems.count { return i }
         return document.problems.first { document.problemResult($0.id) != nil }?.id
     }
 
-    private var isDeletable: Bool {
-        switch selection.value {
-        case .shape, .problem: return true
-        default: return false
-        }
+    /// The selected item when exactly one is selected.
+    private var single: SidebarItem? {
+        selection.value.count == 1 ? selection.value.first : nil
     }
+
+    /// The selected shapes and problems (the Puzzle item can't be deleted).
+    private var deletable: Set<SidebarItem> {
+        selection.value.filter { $0 != .info }
+    }
+
+    private var isDeletable: Bool { !deletable.isEmpty }
+
+    /// A right-click on a selected item acts on the whole selection, otherwise on that item.
+    private func targets(for clicked: SidebarItem) -> Set<SidebarItem> {
+        deletable.contains(clicked) ? deletable : [clicked]
+    }
+
+    private func deleteTitle(for clicked: SidebarItem) -> String {
+        let items = targets(for: clicked)
+        if items.count == 1 {
+            if case .shape = clicked { return "Delete Shape" }
+            return "Delete Problem"
+        }
+        return "Delete \(items.count) Items"
+    }
+
+    private func delete(clicked: SidebarItem) { delete(targets(for: clicked)) }
+
+    private func deleteSelected() { delete(deletable) }
 
     private func addShape() {
         let size = 3
@@ -209,7 +270,7 @@ struct ContentView: View {
         document.edit("New Shape", undo: undo) { p in
             newIndex = Int(bt_shape_add(p, Int32(size), Int32(size), Int32(size)))
         }
-        selection.value = .shape(newIndex)
+        selection.value = [.shape(newIndex)]
     }
 
     private func addProblem() {
@@ -217,17 +278,44 @@ struct ContentView: View {
         document.edit("New Problem", undo: undo) { p in
             newIndex = Int(bt_problem_add(p))
         }
-        selection.value = .problem(newIndex)
+        selection.value = [.problem(newIndex)]
     }
 
-    private func deleteShape(_ i: Int) {
-        document.edit("Delete Shape", undo: undo) { p in bt_shape_remove(p, Int32(i)) }
-        selection.value = .info
+    /// Deletes the shapes and problems in one step, so one Undo brings them all back.
+    /// Highest numbers go first so the others keep their numbers until removed.
+    private func delete(_ items: Set<SidebarItem>) {
+        var shapes: [Int] = [], problems: [Int] = []
+        for item in items {
+            switch item {
+            case .shape(let i): shapes.append(i)
+            case .problem(let i): problems.append(i)
+            case .info: break
+            }
+        }
+        guard !shapes.isEmpty || !problems.isEmpty else { return }
+        let name = items.count == 1 ? (shapes.isEmpty ? "Delete Problem" : "Delete Shape") : "Delete \(items.count) Items"
+        document.edit(name, undo: undo) { p in
+            for i in problems.sorted(by: >) { bt_problem_remove(p, Int32(i)) }
+            for i in shapes.sorted(by: >) { bt_shape_remove(p, Int32(i)) }
+        }
+        selection.value = [.info]
     }
+}
 
-    private func deleteProblem(_ i: Int) {
-        document.edit("Delete Problem", undo: undo) { p in bt_problem_remove(p, Int32(i)) }
-        selection.value = .info
+/// Shown when several shapes and problems are selected.
+struct MultipleSelectionView: View {
+    let count: Int
+    let solving: Bool
+    let onDelete: () -> Void
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Text("\(count) items selected").font(.title2)
+            Button("Delete \(count) Items", role: .destructive, action: onDelete)
+                .disabled(solving)
+            Text("Undo brings them back.").foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

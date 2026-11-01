@@ -1,10 +1,16 @@
 /* Puzzle generator: splits a result shape into pieces and searches for a split
  * with a unique solution whose disassembly needs many moves.
  *
- * Search: random split into connected pieces, then hill climbing that moves one
- * cube at a time between neighbouring pieces; every candidate is checked with
- * the real assembler and disassembler. Restarts from a new random split when
- * it stops improving.
+ * Two kinds of pieces:
+ * - burr sticks: every piece is a straight bar (e.g. 2x2x8) placed in the
+ *   shape; where bars cross, each cube belongs to one of them (the others get
+ *   a notch there), and variable cubes may stay empty.
+ * - any shape: the shape is split into connected blobs.
+ *
+ * Search: a random split, then hill climbing that changes one or two cubes at
+ * a time; every candidate is checked with the real assembler and
+ * disassembler. Restarts from a new random split when it stops improving.
+ * Several searches run in parallel, one per processor core.
  */
 
 #include "burrbridge.h"
@@ -24,10 +30,12 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <cmath>
+#include <memory>
 #include <mutex>
 #include <random>
 #include <string>
@@ -36,6 +44,24 @@
 
 
 namespace {
+
+// each search thread has its own random numbers and number
+thread_local std::mt19937 rng;
+thread_local int threadIndex = 0;
+
+using Clock = std::chrono::steady_clock;
+// a design whose check takes longer than this counts as not working
+constexpr double CHECK_LIMIT = 5.0;
+
+struct Box { int lo[3], hi[3]; };
+
+/* Burr sticks: where each new piece's bar lies, and so which pieces each
+ * cube may belong to. */
+struct Layout {
+  std::vector<Box> slots;                 // slot k is the bar of piece nFixed + k
+  std::vector<std::vector<int>> options;  // cell -> pieces (or HOLE) it may belong to
+  std::vector<int> choices;               // cells with more than one option
+};
 
 struct Evaluation {
   bool valid = false;       // at least one solution (and only one if unique is required)
@@ -90,6 +116,13 @@ struct BTGenerator {
   std::vector<int> fixedIds;               // their shape numbers in the puzzle
   std::vector<int> fixedOwner;             // cell -> starting piece, or UNASSIGNED
   std::vector<int> seedAssign;             // an existing design to start from (empty = none)
+  Layout seedLayout;                       // its bars, in burr stick mode
+
+  // burr sticks: the bars' cross-section; 0 = pieces of any shape
+  int stickW = 0, stickH = 0;
+  bool sticks() const { return stickW > 0; }
+  std::vector<Box> beams;                  // every place a bar fits in the free space
+  std::vector<double> beamFill;            // part of each that is free space
 
   // the cells to split (filled voxels of the result) and their neighbours
   std::vector<int> cellVoxel;              // cell -> voxel index in the result
@@ -98,17 +131,30 @@ struct BTGenerator {
   std::vector<char> variableCell;          // cell may be left empty
   std::vector<std::array<int, 3>> cellPos; // cell -> x, y, z
 
-  std::mt19937 rng;
+  unsigned int seed = 1;
+  int threads = 1;
   std::thread worker;
   std::atomic<bool> stopRequested{false};
+  std::atomic<bool> failed{false};
+
+  // the check each thread is running, so the watchdog can stop it
+  struct Check { assembler_c *assembler = 0; Clock::time_point start; bool stopped = false; };
+  std::mutex checkLock;
+  std::vector<Check> checks;
+  std::unique_ptr<std::atomic<bool>[]> cancel;   // per thread: give up the running check
+  std::atomic<bool> searching{false};
 
   // status, guarded by lock
   std::mutex lock;
   long tried = 0, validFound = 0;
   bool running = true, found = false, haveBest = false, polishing = false;
+  // after the target is reached the search goes on for more moves until it
+  // has found no better design for a while
+  Clock::time_point startTime = Clock::now(), lastBetter;
   int bestVersion = 0;
   Evaluation best;
   std::vector<int> bestAssign;  // cell -> piece
+  Layout bestLayout;            // its bars, in burr stick mode
   std::string error;
 
   ~BTGenerator() {
@@ -252,6 +298,306 @@ struct BTGenerator {
     return false;
   }
 
+  // ---- burr sticks ----
+
+  bool freeAt(int x, int y, int z) const {
+    if (x < 0 || y < 0 || z < 0 || x >= (int)result->getX() || y >= (int)result->getY() || z >= (int)result->getZ()) return false;
+    int c = voxelCell[result->getIndex(x, y, z)];
+    return c >= 0 && fixedOwner[c] == UNASSIGNED;
+  }
+
+  bool inBox(const Box &b, int c) const {
+    for (int a = 0; a < 3; a++)
+      if (cellPos[c][a] < b.lo[a] || cellPos[c][a] > b.hi[a]) return false;
+    return true;
+  }
+
+  /* Every place a bar fits: for each direction and cross-section position,
+   * the longest runs where at least a third of each cross-section slice is
+   * free space and at least half of the whole bar. Cubes of the bar outside the free
+   * space are notches (e.g. where a frame's pin sticks in, or open to the
+   * outside). */
+  void findBeams() {
+    beams.clear();
+    beamFill.clear();
+    int size[3] = {(int)result->getX(), (int)result->getY(), (int)result->getZ()};
+    int minLength = std::max(stickW, stickH) + 2;
+    for (int L = 0; L < 3; L++) {
+      int a = (L + 1) % 3, b = (L + 2) % 3;
+      std::vector<std::pair<int, int>> sections = {{stickW, stickH}};
+      if (stickW != stickH) sections.push_back({stickH, stickW});
+      for (auto [wa, wb] : sections)
+        for (int pa = 0; pa + wa <= size[a]; pa++)
+          for (int pb = 0; pb + wb <= size[b]; pb++) {
+            // free cubes in each slice along the bar
+            std::vector<int> slice(size[L], 0);
+            for (int t = 0; t < size[L]; t++)
+              for (int i = 0; i < wa; i++)
+                for (int j = 0; j < wb; j++) {
+                  int p[3];
+                  p[L] = t; p[a] = pa + i; p[b] = pb + j;
+                  slice[t] += freeAt(p[0], p[1], p[2]);
+                }
+            int area = wa * wb;
+            int start = -1;
+            for (int t = 0; t <= size[L]; t++) {
+              bool ok = t < size[L] && 3 * slice[t] >= area;
+              if (ok && start < 0) start = t;
+              if (!ok && start >= 0) {
+                int s0 = start, s1 = t - 1, cubes = 0;
+                for (int u = s0; u <= s1; u++) cubes += slice[u];
+                double fill = cubes / double(area * (s1 - s0 + 1));
+                if (s1 - s0 + 1 >= minLength && fill >= 0.5) {
+                  Box bx;
+                  bx.lo[L] = s0; bx.hi[L] = s1;
+                  bx.lo[a] = pa; bx.hi[a] = pa + wa - 1;
+                  bx.lo[b] = pb; bx.hi[b] = pb + wb - 1;
+                  beams.push_back(bx);
+                  beamFill.push_back(fill);
+                }
+                start = -1;
+              }
+            }
+          }
+    }
+  }
+
+  /* Which pieces (or HOLE) each cube may belong to, given the bars. */
+  void buildOptions(Layout &L) const {
+    int n = (int)cellVoxel.size();
+    L.options.assign(n, {});
+    L.choices.clear();
+    for (int c = 0; c < n; c++) {
+      auto &o = L.options[c];
+      if (fixedOwner[c] != UNASSIGNED) { o.push_back(fixedOwner[c]); continue; }
+      for (int k = 0; k < (int)L.slots.size(); k++) if (inBox(L.slots[k], c)) o.push_back(nFixed + k);
+      if (variableCell[c] || o.empty()) o.push_back(HOLE);   // a filled cube without a bar makes the layout useless
+      if (o.size() > 1) L.choices.push_back(c);
+    }
+  }
+
+  /* Picks `pieces` bars that together cover every filled cube: a random
+   * greedy cover (bars that cover more new cubes are more likely), then bars
+   * are swapped until no filled cube is left out. */
+  bool chooseLayout(Layout &L) {
+    int n = (int)cellVoxel.size();
+    int m = (int)beams.size();
+    if (m < pieces) return false;
+    std::vector<std::vector<int>> beamCells(m), cellBeams(n);
+    for (int c = 0; c < n; c++)
+      if (fixedOwner[c] == UNASSIGNED)
+        for (int i = 0; i < m; i++) if (inBox(beams[i], c)) { beamCells[i].push_back(c); cellBeams[c].push_back(i); }
+    auto required = [&](int c) { return fixedOwner[c] == UNASSIGNED && !variableCell[c]; };
+    // bars that lie completely in the shape are much more likely
+    std::vector<double> prefer(m);
+    for (int i = 0; i < m; i++) prefer[i] = std::pow(beamFill[i], 8);
+    auto pickWeighted = [&](const std::vector<double> &w) {
+      double sum = 0;
+      for (double x : w) sum += x;
+      if (sum <= 0) return -1;
+      double r = std::uniform_real_distribution<double>(0, sum)(rng);
+      for (int i = 0; i < (int)w.size(); i++) if (w[i] > 0 && (r -= w[i]) <= 0) return i;
+      for (int i = (int)w.size() - 1; i >= 0; i--) if (w[i] > 0) return i;
+      return -1;
+    };
+
+    for (int attempt = 0; attempt < 40; attempt++) {
+      std::vector<int> count(n, 0), chosen;
+      std::vector<char> used(m, 0);
+      auto add = [&](int i) { used[i] = 1; chosen.push_back(i); for (int c : beamCells[i]) count[c]++; };
+      auto remove = [&](int slot) {
+        int i = chosen[slot];
+        used[i] = 0;
+        for (int c : beamCells[i]) count[c]--;
+        chosen.erase(chosen.begin() + slot);
+      };
+      // greedy
+      while ((int)chosen.size() < pieces) {
+        std::vector<double> w(m, 0);
+        bool any = false;
+        for (int i = 0; i < m; i++) {
+          if (used[i]) continue;
+          int gain = 0;
+          for (int c : beamCells[i]) if (!count[c]) gain += variableCell[c] ? 1 : 3;
+          w[i] = double(gain) * gain * prefer[i];
+          any = any || gain > 0;
+        }
+        if (!any) for (int i = 0; i < m; i++) if (!used[i]) w[i] = prefer[i];   // all covered: any bar
+        int pick = pickWeighted(w);
+        if (pick < 0) break;
+        add(pick);
+      }
+      if ((int)chosen.size() != pieces) return false;
+      // swap bars until every filled cube is covered
+      bool ok = false;
+      for (int iter = 0; iter < 60 * pieces; iter++) {
+        std::vector<int> open;
+        for (int c = 0; c < n; c++) if (required(c) && !count[c]) open.push_back(c);
+        if (open.empty()) { ok = true; break; }
+        int u = open[std::uniform_int_distribution<int>(0, (int)open.size() - 1)(rng)];
+        // a new bar through u, preferring ones that cover more open cubes
+        std::vector<double> w(m, 0);
+        for (int i : cellBeams[u]) {
+          if (used[i]) continue;
+          int gain = 0;
+          for (int c : beamCells[i]) if (required(c) && !count[c]) gain++;
+          w[i] = gain * prefer[i];
+        }
+        int in = pickWeighted(w);
+        if (in < 0) break;
+        // drop the bar whose loss leaves the fewest filled cubes uncovered (sometimes a random one)
+        std::vector<char> inNew(n, 0);
+        for (int c : beamCells[in]) inNew[c] = 1;
+        int out = -1, bestLoss = 1 << 30;
+        if (std::uniform_int_distribution<int>(0, 9)(rng) == 0) {
+          out = std::uniform_int_distribution<int>(0, (int)chosen.size() - 1)(rng);
+        } else {
+          for (int s = 0; s < (int)chosen.size(); s++) {
+            int loss = 0;
+            for (int c : beamCells[chosen[s]]) if (required(c) && count[c] == 1 && !inNew[c]) loss++;
+            if (loss < bestLoss || (loss == bestLoss && (rng() & 1))) { bestLoss = loss; out = s; }
+          }
+        }
+        remove(out);
+        add(in);
+      }
+      if (!ok) continue;
+      L.slots.clear();
+      for (int i : chosen) L.slots.push_back(beams[i]);
+      buildOptions(L);
+      return true;
+    }
+    return false;
+  }
+
+  /* Reconnects pieces that fell apart: the small parts of a piece go to
+   * another bar that crosses there (or stay empty), or, if they can't, are
+   * joined to the largest part along the shortest path inside the bar. */
+  bool repairSticks(std::vector<int> &assign, const Layout &L) {
+    int n = (int)assign.size();
+    auto allowed = [&](int c, int k) {
+      const auto &o = L.options[c];
+      return std::find(o.begin(), o.end(), k) != o.end();
+    };
+    for (int round = 0; round < 6 * pieces; round++) {
+      bool allGood = true;
+      for (int k = nFixed; k < total; k++) {
+        // the parts of piece k
+        std::vector<int> part(n, -1);
+        std::vector<int> partSize;
+        for (int c = 0; c < n; c++) {
+          if (assign[c] != k || part[c] >= 0) continue;
+          int id = (int)partSize.size(), count = 0;
+          std::vector<int> stack(1, c);
+          part[c] = id;
+          while (!stack.empty()) {
+            int x = stack.back(); stack.pop_back(); count++;
+            for (int nb : neighbours[x]) if (assign[nb] == k && part[nb] < 0) { part[nb] = id; stack.push_back(nb); }
+          }
+          partSize.push_back(count);
+        }
+        if (partSize.empty()) {
+          // no cubes at all: take one in the middle of its bar
+          allGood = false;
+          std::vector<int> mine;
+          for (int c = 0; c < n; c++) if (allowed(c, k)) mine.push_back(c);
+          if (mine.empty()) return false;
+          assign[mine[mine.size() / 2]] = k;
+          continue;
+        }
+        if (partSize.size() == 1) continue;
+        allGood = false;
+        int main = int(std::max_element(partSize.begin(), partSize.end()) - partSize.begin());
+        if (round % 2 == 0) {
+          // give the cubes of the other parts away where possible
+          bool gave = false;
+          for (int c = 0; c < n; c++) {
+            if (assign[c] != k || part[c] == main) continue;
+            std::vector<int> other;
+            for (int o : L.options[c]) if (o != k) other.push_back(o);
+            if (other.empty()) continue;
+            assign[c] = other[std::uniform_int_distribution<int>(0, (int)other.size() - 1)(rng)];
+            gave = true;
+          }
+          if (gave) continue;
+        }
+        // breadth-first from the main part through the bar to another part
+        std::vector<int> from(n, -2), queue;
+        for (int c = 0; c < n; c++) if (part[c] == main) { from[c] = -1; queue.push_back(c); }
+        int reached = -1;
+        for (size_t q = 0; q < queue.size() && reached < 0; q++)
+          for (int nb : neighbours[queue[q]]) {
+            if (from[nb] != -2 || !allowed(nb, k)) continue;
+            from[nb] = queue[q];
+            if (assign[nb] == k) { reached = nb; break; }
+            queue.push_back(nb);
+          }
+        if (reached < 0) return false;
+        for (int c = from[reached]; c >= 0 && from[c] != -1; c = from[c]) assign[c] = k;
+      }
+      if (allGood) return true;
+    }
+    return false;
+  }
+
+  /* A random split into bars: each cube where bars cross goes to one of them;
+   * some variable cubes stay empty (how many varies from start to start). */
+  bool stickSplit(std::vector<int> &assign, Layout &L) {
+    int n = (int)cellVoxel.size();
+    for (int attempt = 0; attempt < 60; attempt++) {
+      if (!chooseLayout(L)) return false;
+      int emptyPercent = std::uniform_int_distribution<int>(5, 40)(rng);
+      // where bars cross, the bar earlier in a random order mostly wins, so
+      // most bars stay in one piece
+      std::vector<int> rank(total, 0);
+      for (int k = 0; k < total; k++) rank[k] = std::uniform_int_distribution<int>(0, 1 << 20)(rng);
+      assign.assign(n, HOLE);
+      for (int c = 0; c < n; c++) {
+        std::vector<int> pieceOptions;
+        bool canHole = false;
+        for (int o : L.options[c]) { if (o == HOLE) canHole = true; else pieceOptions.push_back(o); }
+        if (pieceOptions.empty()) continue;
+        if (canHole && std::uniform_int_distribution<int>(0, 99)(rng) < emptyPercent) continue;
+        if (std::uniform_int_distribution<int>(0, 99)(rng) < 70)
+          assign[c] = *std::min_element(pieceOptions.begin(), pieceOptions.end(), [&](int a, int b) { return rank[a] < rank[b]; });
+        else
+          assign[c] = pieceOptions[std::uniform_int_distribution<int>(0, (int)pieceOptions.size() - 1)(rng)];
+      }
+      if (!repairSticks(assign, L)) continue;
+      std::vector<int> size(total, 0);
+      for (int a : assign) if (a >= 0) size[a]++;
+      bool ok = true;
+      for (int k = nFixed; k < total; k++) if (size[k] < minSize) ok = false;
+      if (ok) return true;
+    }
+    return false;
+  }
+
+  /* One or two cubes where bars cross change owner (or a variable cube is
+   * emptied or filled); every piece stays in one piece. */
+  bool mutateSticks(std::vector<int> &assign, const Layout &L) {
+    if (L.choices.empty()) return false;
+    std::vector<int> size(total, 0);
+    for (int a : assign) if (a >= 0) size[a]++;
+    int moves = 1 + std::uniform_int_distribution<int>(0, 2)(rng) / 2;
+    int done = 0;
+    for (int tries = 0; tries < 300 && done < moves; tries++) {
+      int c = L.choices[std::uniform_int_distribution<int>(0, (int)L.choices.size() - 1)(rng)];
+      const auto &o = L.options[c];
+      int from = assign[c], to = o[std::uniform_int_distribution<int>(0, (int)o.size() - 1)(rng)];
+      if (to == from || (from >= 0 && size[from] <= minSize)) continue;
+      assign[c] = to;
+      if ((from >= 0 && !isConnected(assign, from)) || (to >= 0 && !isConnected(assign, to))) {
+        assign[c] = from;
+        continue;
+      }
+      if (from >= 0) size[from]--;
+      if (to >= 0) size[to]++;
+      done++;
+    }
+    return done > 0;
+  }
+
   /* Bounding-box fill of each new piece (cubes / box volume). */
   std::vector<double> boxFill(const std::vector<int> &assign) const {
     int m = total - nFixed;
@@ -286,7 +632,11 @@ struct BTGenerator {
 
   /* A mutation of `current` into `candidate`; in compact mode only ones the
    * shape rule allows. */
-  bool step(const std::vector<int> &current, std::vector<int> &candidate) {
+  bool step(const std::vector<int> &current, std::vector<int> &candidate, const Layout *layout = 0) {
+    if (layout) {
+      candidate = current;
+      return mutateSticks(candidate, *layout);
+    }
     std::vector<double> before;
     if (compact) before = boxFill(current);
     for (int tries = 0; tries < 60; tries++) {
@@ -420,31 +770,60 @@ struct BTGenerator {
       voxel_c *r = gt->getVoxel(*result);
       r->initHotspot();
       unsigned int rid = pz.addShape(r);
+      // identical pieces become one shape used several times, so swapping
+      // them does not count as another solution
+      std::vector<voxel_c *> kinds;
+      std::vector<int> counts;
       for (int k = 0; k < total; k++) {
+        voxel_c *v;
         if (k < nFixed) {
-          voxel_c *f = gt->getVoxel(*fixedShapes[k]);
-          f->initHotspot();
-          pz.addShape(f);
+          v = gt->getVoxel(*fixedShapes[k]);
+          v->initHotspot();
         } else {
-          pz.addShape(pieceVoxel(gt, assign, k));
+          v = pieceVoxel(gt, assign, k);
+        }
+        size_t same = 0;
+        unsigned int cubes = v->countState(voxel_c::VX_FILLED);
+        while (same < kinds.size() && (kinds[same]->countState(voxel_c::VX_FILLED) != cubes ||
+                                       !kinds[same]->identicalWithRots(v, false, false))) same++;
+        if (same < kinds.size()) {
+          counts[same]++;
+          delete v;
+        } else {
+          kinds.push_back(v);
+          counts.push_back(1);
         }
       }
+      for (voxel_c *v : kinds) pz.addShape(v);
       problem_c *pr = pz.getProblem(pz.addProblem());
       pr->setResultId(rid);
-      for (int k = 0; k < total; k++) {
-        pr->setShapeMaximum(k + 1, 1);
-        pr->setShapeMinimum(k + 1, 1);
+      for (size_t i = 0; i < kinds.size(); i++) {
+        pr->setShapeMaximum(i + 1, counts[i]);
+        pr->setShapeMinimum(i + 1, counts[i]);
       }
 
       assembler_c *assm = pz.getGridType()->findAssembler(*pr);
       if (!assm) return e;
       if (assm->createMatrix(false, false, false) != assembler_c::ERR_NONE) { delete assm; return e; }
-      assm->reduce();
+      // no reduce(): it takes seconds for many pieces and saves little here
       disassembler_0_c dis(*pr);
+      dis.setCancel(&cancel[threadIndex]);
       Collector cb(&dis, unique);
       cb.assembler = assm;
+      {
+        std::lock_guard<std::mutex> g(checkLock);
+        checks[threadIndex] = {assm, Clock::now(), false};
+        cancel[threadIndex] = false;
+      }
       assm->assemble(&cb);
+      bool stopped;
+      {
+        std::lock_guard<std::mutex> g(checkLock);
+        stopped = checks[threadIndex].stopped;
+        checks[threadIndex].assembler = 0;
+      }
       delete assm;
+      if (stopped) return Evaluation();   // took too long, or the user stopped
 
       e.solutions = cb.solutions;
       e.level = cb.level;
@@ -467,6 +846,8 @@ struct BTGenerator {
       e.score = main * 1000.0 + std::min(other, 99) * 2.0 - (unique ? (cb.solutions - 1) * 3000.0 : 0)
               - free * 40.0 - shapePenalty;
     } catch (...) {
+      std::lock_guard<std::mutex> g(checkLock);
+      checks[threadIndex].assembler = 0;
       e = Evaluation();
     }
     return e;
@@ -521,18 +902,30 @@ struct BTGenerator {
 
   int value(const Evaluation &e) const { return metric == 0 ? e.level : e.moves; }
 
-  void record(const std::vector<int> &assign, const Evaluation &e) {
+  void record(const std::vector<int> &assign, const Evaluation &e, const Layout *L = 0) {
     std::lock_guard<std::mutex> g(lock);
     tried++;
     if (!e.valid) return;
     validFound++;
     if (!haveBest || value(e) > value(best) || (value(e) == value(best) && e.score > best.score)) {
+      if (!haveBest || value(e) > value(best)) lastBetter = Clock::now();
       best = e;
       bestAssign = assign;
+      if (L) bestLayout = *L;
       haveBest = true;
       bestVersion++;
-      if (value(e) >= target) found = true;
+      if (value(e) >= target && !found) found = true;
     }
+  }
+
+  /* Reached the target and found no design with more moves for a while: at
+   * least a minute, or half the time searched so far (at most 10 minutes), so
+   * a search that keeps improving keeps going. Call with lock held. */
+  bool finished() const {
+    if (!found) return false;
+    double elapsed = std::chrono::duration<double>(Clock::now() - startTime).count();
+    double idle = std::chrono::duration<double>(Clock::now() - lastBetter).count();
+    return idle > std::max(60.0, std::min(600.0, elapsed / 2));
   }
 
   /* After a design reaches the target: keep reshaping it towards compact
@@ -574,53 +967,130 @@ struct BTGenerator {
     }
   }
 
+  /* Stops checks that take too long, and running checks when the user stops. */
+  void watchdog() {
+    while (searching) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      std::lock_guard<std::mutex> g(checkLock);
+      for (auto &c : checks)
+        // repeated while the check runs, in case it had not started yet
+        if (c.assembler && (c.stopped || stopRequested ||
+                            std::chrono::duration<double>(Clock::now() - c.start).count() > CHECK_LIMIT)) {
+          c.stopped = true;
+          c.assembler->stop();
+          cancel[&c - &checks[0]] = true;
+        }
+    }
+  }
+
   void run() {
+    startTime = Clock::now();
+    checks.assign(threads, Check());
+    cancel.reset(new std::atomic<bool>[threads]);
+    for (int i = 0; i < threads; i++) cancel[i] = false;
+    searching = true;
+    std::thread dog([this]() { watchdog(); });
+    std::vector<std::thread> helpers;
+    for (int i = 1; i < threads; i++) helpers.emplace_back([this, i]() { search(i); });
+    search(0);
+    for (auto &t : helpers) t.join();
+    if (found && compact && !sticks() && !stopRequested) polish();
+    searching = false;
+    dog.join();
+    std::lock_guard<std::mutex> g(lock);
+    polishing = false;
+    running = false;
+  }
+
+  /* One search thread: climbs from a start design until it stops improving,
+   * then starts again, until the search is finished or the user stops. Once
+   * there is a good design, most new starts are that design with a few random
+   * changes (more the longer nothing better turns up), since good designs are
+   * usually near other good designs; the rest are new random splits so the
+   * search does not get stuck around one design. */
+  void search(int index) {
+    threadIndex = index;
+    rng.seed(seed + 7919u * index);
     std::vector<int> current, candidate;
+    Layout layout;
+    const Layout *L = sticks() ? &layout : 0;
     long restart = 0;
-    while (!stopRequested) {
-      // alternate block-like and blob-like starting splits
+    bool everSplit = false;
+    while (!stopRequested && !failed) {
       bool ok;
-      if (!seedAssign.empty()) {
-        current = seedAssign;
-        int shake = restart == 0 ? 0 : std::uniform_int_distribution<int>(1, 6)(rng);
-        for (int i = 0; i < shake; i++) { std::vector<int> next; if (step(current, next)) current = next; }
+      std::vector<int> fromBest;
+      double idle = 0;
+      {
+        std::lock_guard<std::mutex> g(lock);
+        if (haveBest && best.level >= 2 && restart > 0 &&
+            std::uniform_real_distribution<double>(0, 1)(rng) < 0.7) {
+          fromBest = bestAssign;
+          if (L) layout = bestLayout;
+          idle = std::chrono::duration<double>(Clock::now() - lastBetter).count();
+        }
+      }
+      if (!fromBest.empty()) {
+        current = fromBest;
+        // a few changes; up to about twice as many after a long time without a better design
+        int most = 3 + (int)std::min(idle / 10.0, 6.0);
+        int shake = std::uniform_int_distribution<int>(1, most)(rng);
+        for (int i = 0; i < shake; i++) { std::vector<int> next; if (step(current, next, L)) current = next; }
         restart++;
         ok = true;
+      } else if (!seedAssign.empty()) {
+        current = seedAssign;
+        layout = seedLayout;
+        int shake = restart == 0 && index == 0 ? 0 : std::uniform_int_distribution<int>(1, 6)(rng);
+        for (int i = 0; i < shake; i++) { std::vector<int> next; if (step(current, next, L)) current = next; }
+        restart++;
+        ok = true;
+      } else if (sticks()) {
+        ok = stickSplit(current, layout);
+        restart++;
       } else {
         // alternate block-like and blob-like starting splits
         if (restart % 2 == 0) ok = cutSplit(current) || randomSplit(current);
         else ok = randomSplit(current) || cutSplit(current);
         restart++;
       }
+      if (!ok && everSplit) continue;   // just bad luck this time
+      if (ok) everSplit = true;
       if (!ok) {
         std::lock_guard<std::mutex> g(lock);
-        error = nFixed > 0
-          ? "Could not split the space left by the starting pieces into connected pieces of at least the minimum size. It may be in more separate parts than there are new pieces."
-          : "Could not split the shape into pieces of at least the minimum size.";
+        if (sticks())
+          error = "Could not build the " + std::string(nFixed > 0 ? "space left by the starting pieces" : "shape") + " from "
+                + std::to_string(pieces) + " straight " + std::to_string(stickW) + " x " + std::to_string(stickH)
+                + " sticks. Every filled cube must lie in a stick, and every stick must fit inside the shape (use variable cubes for the gaps between sticks). Try another stick size or number of pieces.";
+        else
+          error = nFixed > 0
+            ? "Could not split the space left by the starting pieces into connected pieces of at least the minimum size. It may be in more separate parts than there are new pieces."
+            : "Could not split the shape into pieces of at least the minimum size.";
+        failed = true;
         break;
       }
       Evaluation cur = evaluate(current);
-      record(current, cur);
+      record(current, cur, L);
       int stale = 0, patience = 40 + 15 * pieces;
       while (!stopRequested && stale < patience) {
         {
           std::lock_guard<std::mutex> g(lock);
-          if (found) break;
+          if (finished()) break;
         }
-        if (!step(current, candidate)) break;
+        if (!step(current, candidate, L)) break;
         Evaluation e = evaluate(candidate);
-        record(candidate, e);
+        record(candidate, e, L);
         if (e.score > cur.score) { current = candidate; cur = e; stale = 0; }
         else if (e.score == cur.score) { current = candidate; stale++; }   // drift sideways
+        else if (e.valid && cur.valid && value(e) >= value(cur) - 3 &&
+                 std::uniform_real_distribution<double>(0, 1)(rng) < 0.1) {
+          // now and then step down a little, to get out of a dead end
+          current = candidate; cur = e; stale++;
+        }
         else stale++;
       }
       std::lock_guard<std::mutex> g(lock);
-      if (found) break;
+      if (finished()) break;
     }
-    if (found && compact && !stopRequested) polish();
-    std::lock_guard<std::mutex> g(lock);
-    polishing = false;
-    running = false;
   }
 };
 
@@ -628,7 +1098,8 @@ extern "C" {
 
 BTGenerator *bt_generator_start(BTPuzzle *p, int shape, int pieces, int target, int metric,
                                 int unique, int minSize, int holes, const int *fixed, int fixedCount,
-                                int startProblem, int compact, unsigned int seed, char **error) {
+                                int startProblem, int compact, int stickWidth, int stickHeight,
+                                unsigned int seed, char **error) {
   auto fail = [&](const char *msg) -> BTGenerator * {
     if (error) { *error = (char *)malloc(strlen(msg) + 1); strcpy(*error, msg); }
     return 0;
@@ -649,8 +1120,13 @@ BTGenerator *bt_generator_start(BTPuzzle *p, int shape, int pieces, int target, 
     g->metric = metric;
     g->unique = unique != 0;
     g->minSize = std::max(1, minSize);
-    g->compact = compact != 0;
-    g->rng.seed(seed ? seed : std::random_device()());
+    g->stickW = stickWidth > 0 && stickHeight > 0 ? std::min(stickWidth, stickHeight) : 0;
+    g->stickH = g->stickW > 0 ? std::max(stickWidth, stickHeight) : 0;
+    g->compact = compact != 0 && !g->sticks();
+    g->seed = seed ? seed : std::random_device()();
+    rng.seed(g->seed);
+    // leave one core for the app
+    g->threads = std::max(1, std::min(8, (int)std::thread::hardware_concurrency() - 1));
 
     const voxel_c *v = g->result;
     g->voxelCell.assign(v->getXYZ(), -1);
@@ -812,10 +1288,21 @@ BTGenerator *bt_generator_start(BTPuzzle *p, int shape, int pieces, int target, 
           smallest = std::min(smallest, sz);
         }
         g->minSize = std::min(g->minSize, smallest);   // don't rule out the start itself
+        if (g->sticks()) {
+          // each piece of the design keeps to its own bounding box
+          for (int k = 0; k < generated; k++) {
+            Box b = {{1 << 30, 1 << 30, 1 << 30}, {-1, -1, -1}};
+            for (int c = 0; c < n; c++)
+              if (assign[c] == g->nFixed + k)
+                for (int a = 0; a < 3; a++) { b.lo[a] = std::min(b.lo[a], g->cellPos[c][a]); b.hi[a] = std::max(b.hi[a], g->cellPos[c][a]); }
+            g->seedLayout.slots.push_back(b);
+          }
+        }
       }
     }
 
     g->total = g->nFixed + pieces;
+    if (g->sticks()) holes = 0;   // with sticks, variable cubes are filled or left empty as the search likes
 
     int freeCells = 0, variables = 0;
     for (int c = 0; c < n; c++)
@@ -837,6 +1324,36 @@ BTGenerator *bt_generator_start(BTPuzzle *p, int shape, int pieces, int target, 
       }
     }
 
+    if (g->sticks()) {
+      if (!g->seedAssign.empty()) {
+        g->buildOptions(g->seedLayout);
+      } else {
+        g->findBeams();
+        // use only bars that lie completely inside the shape when they are enough
+        std::vector<Box> all = g->beams;
+        std::vector<double> allFill = g->beamFill;
+        std::vector<Box> whole;
+        for (size_t i = 0; i < all.size(); i++) if (allFill[i] >= 1.0) whole.push_back(all[i]);
+        g->beams = whole;
+        g->beamFill.assign(whole.size(), 1.0);
+        Layout test;
+        bool covered = g->chooseLayout(test);
+        if (!covered && all.size() > whole.size()) {
+          g->beams = all;
+          g->beamFill = allFill;
+          covered = g->chooseLayout(test);
+        }
+        if (!covered) {
+          std::string msg = g->beams.empty()
+            ? "No straight " + std::to_string(g->stickW) + " x " + std::to_string(g->stickH) + " stick fits inside the " + (g->nFixed > 0 ? "space left by the starting pieces" : "shape") + ". Choose a thinner stick or a bigger shape."
+            : "Could not cover the " + std::string(g->nFixed > 0 ? "space left by the starting pieces" : "shape") + " with " + std::to_string(pieces) + " straight " + std::to_string(g->stickW) + " x " + std::to_string(g->stickH)
+              + " sticks. Every filled cube must lie in a stick that fits inside the shape; make the gaps between sticks variable or empty, or change the number of pieces or the stick size.";
+          delete g;
+          return fail(msg.c_str());
+        }
+      }
+    }
+
     g->worker = std::thread([g]() { g->run(); });
     return g;
   } catch (...) {
@@ -850,6 +1367,7 @@ void bt_generator_status(BTGenerator *g, BTGeneratorStatus *s) {
   s->valid = g->validFound;
   s->running = g->running ? 1 : 0;
   s->found = g->found ? 1 : 0;
+  s->searchingMore = g->found && g->running && !g->polishing ? 1 : 0;
   s->haveBest = g->haveBest ? 1 : 0;
   s->bestLevel = g->haveBest ? g->best.level : 0;
   s->bestMoves = g->haveBest ? g->best.moves : 0;

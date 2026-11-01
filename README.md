@@ -16,8 +16,13 @@ open build/BurrTools.app
 
 ## Features
 
-* Opens and saves `.xmpuzzle` files, with undo/redo for every change. At
+* Opens and saves `.xmpuzzle` files, with undo/redo for every change. Files
+  are only written when you save (File → Save); closing or quitting with
+  unsaved changes asks whether to save them. At
   launch it shows the Open dialog (File → New makes a new puzzle).
+* Deletes several shapes and problems at once: Command- or Shift-click them in
+  the sidebar, then press Delete, the − button or Delete in the right-click
+  menu. One Undo brings them all back.
 * Shows shapes and solutions in 3D for every grid type (cubes, prisms,
   spheres, rhombic, tetra-octa).
 * Edits cube-grid shapes layer by layer with a Filled / Variable / Empty pen
@@ -28,12 +33,29 @@ open build/BurrTools.app
   hollow, all variable, or variable inside (a result shape whose centre may
   stay empty, like Borneo).
 * Puzzle generator (+ → Generate Puzzle…): pick a final shape, the number of
-  pieces and the minimum number of moves (level, or total moves). It splits
+  pieces and the minimum number of moves: in total to take it apart (default),
+  or until the first piece comes out (level). Designs are ranked by that
+  number, then by the other. It splits
   the shape's cubes (fixed and variable, leaving a chosen number of variable
   cubes empty, like Borneo) into connected pieces and searches in the background for a design
   with one solution that reaches the target, checking every candidate with the
-  real solver. The best design can be added to the puzzle and is solved right
+  real solver, several designs at a time (one per processor core). Reaching
+  the target does not end the search: it keeps looking for designs with more
+  moves until it finds no better one for a while (at least a minute, or half
+  the time searched so far, up to 10 minutes). Each search thread starts
+  again mostly from the best design so far with a few random changes, and
+  now and then accepts a slightly worse design to get out of a dead end, so
+  hard shapes (like a frame with variable cubes) keep improving the longer it
+  runs. The
+  best design can be added to the puzzle at any time and is solved right
   away. Options:
+  * **Pieces are burr sticks** (default): every new piece is a straight bar
+    of the chosen cross-section (2 × 2, 2 × 3, 1 × 6, …) lying in the shape,
+    with notches where it crosses other bars, like the pieces of a classic
+    burr. Each filled cube must lie in a stick; variable cubes are filled or
+    left empty as the search needs, so mark the gaps between sticks as
+    variable. The stick size is guessed from existing problems with the same
+    final shape. **Any shape** splits the shape into free-form pieces instead.
   * **Starting pieces**: keep shapes such as a cage or box unchanged and
     generate only the pieces that fill the rest. They are placed as in a saved
     solution of a problem with the same final shape, otherwise where they are
@@ -41,7 +63,7 @@ open build/BurrTools.app
   * **Start from** an existing solved design: reshape its pieces step by step
     instead of starting from random splits. Use this for tight designs such as
     boxes, where random pieces almost never come apart.
-  * **Compact pieces** (on by default): no new piece may spread out as a thin
+  * **Compact pieces** (any shape only, on by default): no new piece may spread out as a thin
     web (each must fill at least about a third of its bounding box), and once
     a design reaches the target it keeps reshaping the pieces towards solid
     blocks while the design still has one solution and reaches the target.

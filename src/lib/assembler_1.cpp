@@ -1003,7 +1003,6 @@ void assembler_1_c::reduce(void) {
 
   col_rem += clumpify();
 
-  fprintf(stderr, "removed %i rows and %i columns\n", row_rem, col_rem);
 }
 
 void assembler_1_c::checkForTransformedAssemblies(unsigned int pivot, mirrorInfo_c * mir) {

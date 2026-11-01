@@ -93,6 +93,8 @@ separation_c * disassembler_0_c::disassemble_rec(const std::vector<unsigned int>
   /* while there are nodes left we should look at */
   while (!openlist[curListFront].empty()) {
 
+    if (cancel && *cancel) return 0;
+
     /* remove the node from the open list and start examining */
     disassemblerNode_c * node = openlist[curListFront].front();
     openlist[curListFront].pop();

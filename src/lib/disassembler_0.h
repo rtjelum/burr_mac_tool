@@ -23,6 +23,8 @@
 
 #include "disassembler_a.h"
 
+#include <atomic>
+
 class separation_c;
 
 class disassemblerNode_c;
@@ -55,6 +57,16 @@ public:
 
   disassembler_0_c(const problem_c & puz) : disassembler_a_c(puz) { }
   ~disassembler_0_c() { }
+
+  /**
+   * When the flag becomes true (set from another thread), the search gives up
+   * and disassemble returns as if the puzzle could not be taken apart.
+   */
+  void setCancel(const std::atomic<bool> * flag) { cancel = flag; }
+
+private:
+
+  const std::atomic<bool> * cancel = nullptr;
 
 private:
 
