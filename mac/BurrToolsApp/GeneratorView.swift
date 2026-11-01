@@ -198,7 +198,7 @@ struct GeneratorView: View {
                         LabeledContent("Smallest piece", value: "\(minSize.value) cubes")
                     }
                     Toggle("Compact pieces", isOn: $compact.value)
-                        .help("After reaching the target, keep reshaping the pieces towards solid blocks, with fewer thin arms and gaps, without losing moves.")
+                        .help("No piece may spread out as a thin web, and after reaching the target the pieces are reshaped towards solid blocks without losing moves.")
                 }
                 .formStyle(.grouped)
                 .disabled(model.running)

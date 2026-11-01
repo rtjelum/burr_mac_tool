@@ -42,10 +42,11 @@ What it does:
   * **Start from** an existing solved design: reshape its pieces step by step
     instead of starting from random splits. Use this for tight designs such as
     boxes, where random pieces almost never come apart.
-  * **Compact pieces** (on by default): once a design reaches the target, it
-    keeps reshaping the pieces towards solid blocks, with fewer thin arms and
-    gaps, as long as the design still has one solution and reaches the target.
-    This takes a minute or two more; Add to Puzzle takes the best design so far.
+  * **Compact pieces** (on by default): no new piece may spread out as a thin
+    web (each must fill at least about a third of its bounding box), and once
+    a design reaches the target it keeps reshaping the pieces towards solid
+    blocks while the design still has one solution and reaches the target.
+    The search takes longer; Add to Puzzle takes the best design so far.
   Note: a completely solid box only gives level-1 puzzles; for higher
   levels the shape needs empty or variable space inside (e.g. Make Inside
   Variable) or gaps.

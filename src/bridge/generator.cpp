@@ -252,6 +252,51 @@ struct BTGenerator {
     return false;
   }
 
+  /* Bounding-box fill of each new piece (cubes / box volume). */
+  std::vector<double> boxFill(const std::vector<int> &assign) const {
+    int m = total - nFixed;
+    std::vector<int> n(m, 0);
+    std::vector<std::array<int, 6>> b(m, {1 << 30, 1 << 30, 1 << 30, -(1 << 30), -(1 << 30), -(1 << 30)});
+    for (int c = 0; c < (int)assign.size(); c++) {
+      int k = assign[c] - nFixed;
+      if (k < 0) continue;
+      n[k]++;
+      for (int a = 0; a < 3; a++) {
+        b[k][a] = std::min(b[k][a], cellPos[c][a]);
+        b[k][a + 3] = std::max(b[k][a + 3], cellPos[c][a]);
+      }
+    }
+    std::vector<double> fill(m, 1.0);
+    for (int k = 0; k < m; k++)
+      if (n[k] > 0)
+        fill[k] = n[k] / (double(b[k][3] - b[k][0] + 1) * (b[k][4] - b[k][1] + 1) * (b[k][5] - b[k][2] + 1));
+    return fill;
+  }
+
+  /* Compact mode rule: no new piece may fill less than about a third of its
+   * bounding box, so pieces can't spread around the puzzle as thin webs. A piece that
+   * already breaks the rule (because of the start) may not get worse. */
+  static constexpr double MIN_FILL = 0.35;
+  bool shapeAllowed(const std::vector<double> &before, const std::vector<int> &candidate) const {
+    std::vector<double> after = boxFill(candidate);
+    for (size_t k = 0; k < after.size(); k++)
+      if (after[k] < std::min(MIN_FILL, before[k]) - 1e-9) return false;
+    return true;
+  }
+
+  /* A mutation of `current` into `candidate`; in compact mode only ones the
+   * shape rule allows. */
+  bool step(const std::vector<int> &current, std::vector<int> &candidate) {
+    std::vector<double> before;
+    if (compact) before = boxFill(current);
+    for (int tries = 0; tries < 60; tries++) {
+      candidate = current;
+      if (!mutate(candidate)) return false;
+      if (!compact || shapeAllowed(before, candidate)) return true;
+    }
+    return false;
+  }
+
   /* How far the new pieces are from compact lumps: 0 for block-like pieces,
    * about 1 per piece that is all thin arms or full of gaps. Two parts:
    * - thinness: cube-to-cube contacts compared to a cube-shaped piece of the
@@ -280,7 +325,8 @@ struct BTGenerator {
         double tree = n - 1;
         if (ideal > tree) thin = std::max(0.0, std::min(1.0, (ideal - contacts) / (ideal - tree)));
       }
-      total += 0.7 * thin + 0.5 * gaps;
+      // pieces that fill little of their box (webs) count extra
+      total += 0.7 * thin + 0.5 * gaps + 3.0 * std::max(0.0, 0.5 - n / box);
     }
     return total;
   }
@@ -506,8 +552,8 @@ struct BTGenerator {
     }
     int stale = 0, patience = 200 + 50 * total;
     while (!stopRequested && stale < patience) {
-      std::vector<int> candidate = current;
-      if (!mutate(candidate)) break;
+      std::vector<int> candidate;
+      if (!step(current, candidate)) break;
       Evaluation e = evaluate(candidate);
       {
         std::lock_guard<std::mutex> g(lock);
@@ -537,11 +583,14 @@ struct BTGenerator {
       if (!seedAssign.empty()) {
         current = seedAssign;
         int shake = restart == 0 ? 0 : std::uniform_int_distribution<int>(1, 6)(rng);
-        for (int i = 0; i < shake; i++) mutate(current);
+        for (int i = 0; i < shake; i++) { std::vector<int> next; if (step(current, next)) current = next; }
         restart++;
         ok = true;
       } else {
-        ok = (restart++ % 2 == 0) ? (cutSplit(current) || randomSplit(current)) : (randomSplit(current) || cutSplit(current));
+        // alternate block-like and blob-like starting splits
+        if (restart % 2 == 0) ok = cutSplit(current) || randomSplit(current);
+        else ok = randomSplit(current) || cutSplit(current);
+        restart++;
       }
       if (!ok) {
         std::lock_guard<std::mutex> g(lock);
@@ -558,8 +607,7 @@ struct BTGenerator {
           std::lock_guard<std::mutex> g(lock);
           if (found) break;
         }
-        candidate = current;
-        if (!mutate(candidate)) break;
+        if (!step(current, candidate)) break;
         Evaluation e = evaluate(candidate);
         record(candidate, e);
         if (e.score > cur.score) { current = candidate; cur = e; stale = 0; }
