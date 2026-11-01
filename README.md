@@ -4,6 +4,31 @@ A native macOS app (SwiftUI) for designing, solving and generating burr-type
 puzzles, built on the solver from [BurrTools](https://burrtools.sourceforge.net)
 by Andreas Röver. It opens and saves the usual `.xmpuzzle` files.
 
+<p align="center">
+  <img src="docs/images/disassembly.gif" width="300" alt="Animated disassembly of the Stepping Burr">
+</p>
+
+## Screenshots
+
+Solving a problem and playing back the disassembly:
+
+![Problem view with the solver settings and the 3D solution viewer](docs/images/problem.png)
+
+Editing a shape layer by layer:
+
+![Shape editor with a layer grid and a 3D preview](docs/images/shape-editor.png)
+
+The puzzle generator searching for a six-piece burr:
+
+![Generate Puzzle dialog showing the best design found so far](docs/images/generator.png)
+
+Exported disassembly frames in the Studio (left) and Classic (right) looks:
+
+<p>
+  <img src="docs/images/studio.png" width="49%" alt="Excaliburr rendered in the Studio look">
+  <img src="docs/images/classic.png" width="49%" alt="Excaliburr rendered in the Classic look">
+</p>
+
 ## Build and run
 
 Needs macOS 14 or later and only the Xcode Command Line Tools
@@ -113,6 +138,7 @@ browsers, marking hole faces for hollow STL pieces, and Lua scripting.
   mesh code (with fixes for current compilers and the text disassembly output).
 * `src/bridge/`: the C interface the app calls, and the puzzle generator.
 * `examples/`: example puzzles.
+* `docs/images/`: screenshots and renders used in this README.
 
 ## Credits and licence
 
