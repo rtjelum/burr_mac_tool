@@ -50,7 +50,7 @@ struct ShapeDetailView: View {
             }
         }
         .onAppear { name.value = info.name }
-        .onChange(of: shape) { _, _ in name.value = document.shape(shape).name; layer.value = 0 }
+        .onChange(of: shape) { _, _ in name.value = document.shape(shape).name }
         .onDisappear(perform: saveName)
     }
 
@@ -110,7 +110,14 @@ struct LayerEditor: View {
             }
             .disabled(document.isSolving)
 
-            HStack {
+            HStack(spacing: 4) {
+                Text("Shift:").foregroundStyle(.secondary)
+                shiftButton("arrow.left", "Move all cubes one step left", -1, 0, 0, info)
+                shiftButton("arrow.right", "Move all cubes one step right", 1, 0, 0, info)
+                shiftButton("arrow.up", "Move all cubes one step up", 0, 1, 0, info)
+                shiftButton("arrow.down", "Move all cubes one step down", 0, -1, 0, info)
+                shiftButton("square.3.layers.3d.top.filled", "Move all cubes one layer up", 0, 0, 1, info)
+                shiftButton("square.3.layers.3d.bottom.filled", "Move all cubes one layer down", 0, 0, -1, info)
                 Spacer()
                 Button(pen.value == BT_VOXEL_VARIABLE ? "Layer Variable" : "Fill Layer") {
                     fillLayer(pen.value == BT_VOXEL_EMPTY ? BT_VOXEL_FILLED : pen.value, sx, sy)
@@ -183,8 +190,51 @@ struct LayerEditor: View {
         document.liveChange { p in bt_shape_set(p, Int32(shape), Int32(x), Int32(y), Int32(z), Int32(value)) }
     }
 
+    private func shiftButton(_ icon: String, _ help: String, _ dx: Int, _ dy: Int, _ dz: Int, _ info: ShapeInfo) -> some View {
+        Button { shift(dx, dy, dz, info) } label: { Image(systemName: icon) }
+            .help(canShift(dx, dy, dz, info) ? help : help + " (blocked: cubes would fall off the edge)")
+            .disabled(!canShift(dx, dy, dz, info))
+    }
+
+    /// A shift is allowed only if no cube sits on the edge it would be pushed past.
+    private func canShift(_ dx: Int, _ dy: Int, _ dz: Int, _ info: ShapeInfo) -> Bool {
+        let (sx, sy, sz) = info.size
+        var any = false
+        for x in 0..<sx {
+            for y in 0..<sy {
+                for z in 0..<sz where document.voxel(shape, x, y, z) != BT_VOXEL_EMPTY {
+                    let nx = x + dx, ny = y + dy, nz = z + dz
+                    if nx < 0 || ny < 0 || nz < 0 || nx >= sx || ny >= sy || nz >= sz { return false }
+                    any = true
+                }
+            }
+        }
+        return any
+    }
+
+    private func shift(_ dx: Int, _ dy: Int, _ dz: Int, _ info: ShapeInfo) {
+        let (sx, sy, sz) = info.size
+        var cells: [(Int, Int, Int, Int)] = []
+        for x in 0..<sx {
+            for y in 0..<sy {
+                for z in 0..<sz {
+                    let v = document.voxel(shape, x, y, z)
+                    if v != BT_VOXEL_EMPTY { cells.append((x, y, z, v)) }
+                }
+            }
+        }
+        document.edit("Shift Shape", undo: undo) { p in
+            for (x, y, z, _) in cells {
+                bt_shape_set(p, Int32(shape), Int32(x), Int32(y), Int32(z), Int32(BT_VOXEL_EMPTY))
+            }
+            for (x, y, z, v) in cells {
+                bt_shape_set(p, Int32(shape), Int32(x + dx), Int32(y + dy), Int32(z + dz), Int32(v))
+            }
+        }
+    }
+
     private func fillLayer(_ value: Int, _ sx: Int, _ sy: Int) {
-        let z = layer
+        let z = min(layer, document.shape(shape).size.z - 1)
         document.edit(value == BT_VOXEL_EMPTY ? "Clear Layer" : (value == BT_VOXEL_VARIABLE ? "Make Layer Variable" : "Fill Layer"), undo: undo) { p in
             for x in 0..<sx {
                 for y in 0..<sy {
